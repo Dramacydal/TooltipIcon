@@ -10,15 +10,17 @@ local TOOLTIP_PADDING = 20 -- left + right inner margin of a tooltip
 local WHITE = 0.9 -- minimum color component of a header line
 local LINE_SPACING = 2 -- estimate for the first, uncached layout
 local MAX_SIZE = 64
+local MIN_ICON_SIZE = 16 -- lowest value of the minimum icon size
+local MAX_GAP = 16 -- highest gap between the icon and the text
 local FACTION_ICON_SIZE = 16 -- faction crest inside a text line
 local CLASS_ICON_SIZE = 14 -- class icon inside a text line
 local INLINE_ICON_OFFSET = -2 -- their horizontal shift (the texture margins make them look indented)
 local MAX_FIT_PASSES = 2 -- width corrections per tooltip build
 local PAD_DESCENT = 4 -- measured: a line is 4 px taller than its pad texture
 local MAX_PASSES = 3 -- layout correction passes per uncached header line count
-local CROP = 0.07 -- trims the built-in dark border of spell icons
+local CROP = 0.07 -- trims the built-in dark border of spell icons (unless "Show the icon border" is on)
 
-local defaults = { size = 32, gap = 6, unitClassMode = 1 }
+local defaults = { size = 32, gap = 6, unitClassMode = 2 } -- 2: class and faction icon on the level line
 local db
 
 local GetSpellTexture = C_Spell and C_Spell.GetSpellTexture or GetSpellTexture
@@ -55,6 +57,29 @@ local rehooks, rehookScheduled, rehookGaveUp = 0, false, false
 
 local function Line(tooltip, side, i)
 	return _G[tooltip:GetName() .. side .. i]
+end
+
+-- The line of the tooltip data that was added as line `i` of the tooltip. The data may hold lines that were
+-- not added (empty ones: line 2 of "Will of the Forsaken" is empty in the data and absent on the screen
+-- outside of combat), so its index is not the index of the line on the screen: lineIndex is.
+local function DataLine(tooltipData, i)
+	local lines = tooltipData and tooltipData.lines
+	if type(lines) ~= "table" then
+		return nil
+	end
+	local info = lines[i]
+	if info and info.lineIndex == i then
+		return info
+	end
+	local processed = false
+	for _, line in ipairs(lines) do
+		if line.lineIndex == i then
+			return line
+		end
+		processed = processed or line.lineIndex ~= nil
+	end
+	-- data the handler did not number: the same index; otherwise the line is not from the data (added by an addon)
+	return not processed and info or nil
 end
 
 local function Clamp(size)
@@ -137,7 +162,7 @@ end
 -- (the measured height when a header of that length was seen, an estimate from the first two lines otherwise).
 local function MinBlockHeight(tooltip, kind)
 	local lines = kinds[kind].minLines
-	if not lines then
+	if not lines or (kinds[kind].nameOnlyKey and db[kinds[kind].nameOnlyKey]) then
 		return 0
 	end
 	local cache = GetCache(kind, lines)
@@ -481,6 +506,7 @@ end
 kinds.talent = {
 	maxHeader = 2,
 	category = "spell",
+	nameOnlyKey = "spellNameOnly",
 	isDescription = function(tooltip, _, i)
 		return not IsTalentRankLine(tooltip, i)
 	end,
@@ -488,6 +514,7 @@ kinds.talent = {
 
 kinds.spell = {
 	maxHeader = 3,
+	nameOnlyKey = "spellNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
 		if IsTalentRankLine(tooltip, i) then
 			return false
@@ -496,7 +523,7 @@ kinds.spell = {
 		if i > 2 and IsTalentRankLine(tooltip, i - 1) then
 			return true
 		end
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		if info and info.type == Enum.TooltipDataLineType.SpellDescription then
 			return true
 		end
@@ -507,8 +534,9 @@ kinds.spell = {
 -- Companion pet: name, then white lines ("Instant", cast time) like a spell; the description is yellow.
 kinds.companion = {
 	maxHeader = 3,
+	nameOnlyKey = "companionNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		if info and info.type == Enum.TooltipDataLineType.SpellDescription then
 			return true
 		end
@@ -519,8 +547,9 @@ kinds.companion = {
 -- Mount: name, then white lines (cast time) like a spell; the description is yellow, requirements are red.
 kinds.mount = {
 	maxHeader = 3,
+	nameOnlyKey = "mountNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		if info and info.type == Enum.TooltipDataLineType.SpellDescription then
 			return true
 		end
@@ -599,8 +628,9 @@ end
 
 kinds.item = {
 	maxHeader = 4,
+	nameOnlyKey = "itemNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		if info and itemHeaderTypes[info.type] then
 			return false
 		end
@@ -628,8 +658,9 @@ local toyPromotedPatterns = BuildPatterns({ "TOY" })
 
 kinds.toy = {
 	maxHeader = 3,
+	nameOnlyKey = "toyNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		if info and toyHeaderTypes[info.type] then
 			return false
 		end
@@ -879,15 +910,45 @@ local function ColorPlayerName(tooltip, unit)
 	end
 end
 
+-- Option "name only" for spells: only the name is next to the icon. The rank of a spell already stands in the
+-- right column of the name line; the rank line of a talent ("Rank 0/5") is moved there as well.
+local function EditSpellRank(tooltip, st, count)
+	if not db.spellNameOnly or count ~= 1 or tooltip:NumLines() < 2 or not IsTalentRankLine(tooltip, 2) then
+		return count
+	end
+	local right = Line(tooltip, "TextRight", 1)
+	local rightText = right:IsShown() and right:GetText()
+	if (rightText and (issecret(rightText) or rightText ~= "")) or not SnapshotLines(tooltip, st) then
+		return count
+	end
+	local rank = GetLineState(tooltip, 2)
+	right:SetText(rank.text)
+	right:SetTextColor(rank.r, rank.g, rank.b)
+	right:Show()
+	DropLines(tooltip, 2, tooltip:NumLines(), 1)
+	return count
+end
+
+kinds.spell.edit = EditSpellRank
+kinds.talent.edit = EditSpellRank
+
 local function EditUnitLines(tooltip, st, count)
 	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
 	if not unit or issecret(unit) or not UnitExists(unit) or not SnapshotLines(tooltip, st) then
 		return count
 	end
+	-- with "name only" the lines below the name are not rearranged (the faction, class and level lines stay
+	-- as they are); the PvP text still goes next to the name of a player and the name keeps the class color
+	local nameOnly = db.unitNameOnly
 	if UnitIsPlayer(unit) then
-		EditPlayerLines(tooltip, count)
+		if not nameOnly then
+			EditPlayerLines(tooltip, count)
+		end
 		MovePlayerPvp(tooltip, count)
 		ColorPlayerName(tooltip, unit)
+		return count
+	end
+	if nameOnly then
 		return count
 	end
 	return EditNpcLines(tooltip, count)
@@ -895,6 +956,8 @@ end
 
 kinds.unit = {
 	maxHeader = 4,
+	noBorder = true, -- a portrait has no border: it is never cut
+	nameOnlyKey = "unitNameOnly",
 	minLines = 3, -- the portrait is as big as for a header of three lines
 	bodyGap = 4, -- the body starts 4 px lower than the header block (the portrait keeps its size)
 	padTop = true, -- the last header line keeps its text at the top: the extra height goes below the header
@@ -910,12 +973,20 @@ kinds.unit = {
 	end,
 }
 
+-- how many lines may be next to the icon: one while the "name only" option of the kind is on
+local function MaxHeader(kind)
+	return kind.nameOnlyKey and db[kind.nameOnlyKey] and 1 or kind.maxHeader
+end
+
 local function GetHeaderCount(tooltip, tooltipData, kind)
+	if kind.nameOnlyKey and db[kind.nameOnlyKey] then
+		return 1
+	end
 	if kind.headerCount then
 		return kind.headerCount(tooltip, tooltipData)
 	end
 	local count = 1
-	local numLines = math.min(kind.maxHeader, tooltip:NumLines())
+	local numLines = math.min(MaxHeader(kind), tooltip:NumLines())
 	while count < numLines and not kind.isDescription(tooltip, tooltipData, count + 1) do
 		count = count + 1
 	end
@@ -924,14 +995,29 @@ end
 
 -- /tti debug: prints type / color / right text of every line of a tooltip
 local function DumpLines(tooltip, tooltipData, kindName)
+	-- text and colors of the lines can be secret (in combat): a secret value only goes through tostring
+	local function Show(value)
+		if value == nil then
+			return "nil"
+		elseif issecret(value) then
+			return "<secret>"
+		end
+		return (tostring(value):gsub("|", "||")) -- "||" makes color codes visible in the chat
+	end
+
 	Print("kind " .. kindName)
 	for i = 1, tooltip:NumLines() do
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		local left, right = Line(tooltip, "TextLeft", i), Line(tooltip, "TextRight", i)
 		local r, g, b = left:GetTextColor()
-		Print(("%d type=%s color=%.2f,%.2f,%.2f right=%s | %s"):format(i, tostring(info and info.type),
-			r or 0, g or 0, b or 0, tostring(right:IsShown() and right:GetText()),
-			(tostring(left:GetText()):gsub("|", "||")))) -- "||" makes color codes visible in the chat
+		local color = (issecret(r) or issecret(g) or issecret(b)) and "<secret>"
+			or ("%.2f,%.2f,%.2f"):format(r or 0, g or 0, b or 0)
+		Print(("%d type=%s color=%s right=%s | %s"):format(i, Show(info and info.type), color,
+			Show(right:IsShown() and right:GetText()), Show(left:GetText())))
+		if info and (issecret(left:GetText()) or issecret(right:GetText())) then
+			-- the same line in the tooltip data, which is not secret
+			Print(("   data: left=%s right=%s"):format(Show(info.leftText), Show(info.rightText)))
+		end
 	end
 end
 
@@ -940,7 +1026,7 @@ end
 local function PromoteLine(tooltip, tooltipData, st, kind, count)
 	local sellPrice = Enum.TooltipDataLineType.SellPrice
 	for i = count + 1, tooltip:NumLines() do
-		local info = tooltipData and tooltipData.lines and tooltipData.lines[i]
+		local info = DataLine(tooltipData, i)
 		if info and info.type == sellPrice then
 			break
 		end
@@ -969,6 +1055,57 @@ ns.unitClassModes = {
 	{ 1, TTI_CLASS_MODE_1, TTI_CLASS_MODE_1_DESC },
 	{ 2, TTI_CLASS_MODE_2, TTI_CLASS_MODE_2_DESC },
 }
+
+-- "Name only next to the icon" options of the tooltip kinds, by their saved variable (kind.nameOnlyKey)
+function ns.IsNameOnly(key)
+	return db[key]
+end
+
+function ns.SetNameOnly(key, value)
+	db[key] = value and true or false
+end
+
+-- icon size and gap (the sliders of the settings); the layout cache depends on both
+function ns.IsRoundPortraits()
+	return db.roundPortraits
+end
+
+function ns.SetRoundPortraits(value)
+	db.roundPortraits = value and true or false
+end
+
+function ns.IsIconBorder()
+	return db.iconBorder
+end
+
+function ns.SetIconBorder(value)
+	db.iconBorder = value and true or false
+end
+
+function ns.GetIconSize()
+	return db.size
+end
+
+ns.ICON_SIZE_MIN, ns.ICON_SIZE_MAX = MIN_ICON_SIZE, MAX_SIZE
+ns.ICON_GAP_MIN, ns.ICON_GAP_MAX = 0, MAX_GAP
+
+local function Clamped(value, minValue, maxValue)
+	return math.min(math.max(math.floor(value + 0.5), minValue), maxValue)
+end
+
+function ns.SetIconSize(value)
+	db.size = Clamped(value, MIN_ICON_SIZE, MAX_SIZE)
+	wipe(layoutCache)
+end
+
+function ns.GetIconGap()
+	return db.gap
+end
+
+function ns.SetIconGap(value)
+	db.gap = Clamped(value, 0, MAX_GAP)
+	wipe(layoutCache)
+end
 
 function ns.IsUnitClassColor()
 	return db.unitClassColor
@@ -1017,11 +1154,19 @@ function ns.SetKindEnabled(kindName, value)
 	end
 end
 
+-- the icon is cut at the edges to drop the border built into its texture, unless the border is shown;
+-- a portrait has no border and is never cut
+local function SetIconCrop(icon, kindName)
+	local crop = (db.iconBorder or kinds[kindName].noBorder) and 0 or CROP
+	icon:SetTexCoord(crop, 1 - crop, crop, 1 - crop)
+end
+
 local function ShowIcon(tooltip, tooltipData, kindName, texture)
 	local st = states[tooltip]
 	if debugMode then
 		local id = tooltipData and tooltipData.id
-		Print(("%s: %s, id=%s, icon=%s"):format(kindName, tooltip:GetName() or "?", tostring(id), tostring(texture)))
+		Print(("%s: %s, id=%s, icon=%s"):format(kindName, tooltip:GetName() or "?",
+			issecret(id) and "<secret>" or tostring(id), tostring(texture)))
 		Print(("start: tooltip width=%s minwidth=%s name width=%s"):format(
 			tostring(Plain(tooltip:GetWidth())), tostring(Plain(tooltip:GetMinimumWidth())), tostring(Plain(Line(tooltip, "TextLeft", 1):GetWidth()))))
 		if not st then
@@ -1050,7 +1195,7 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 
 	local kind = kinds[kindName]
 	local count = GetHeaderCount(tooltip, tooltipData, kind)
-	if kind.isPromoted and count < kind.maxHeader then
+	if kind.isPromoted and count < MaxHeader(kind) then
 		count = PromoteLine(tooltip, tooltipData, st, kind, count)
 	end
 	if kind.edit then
@@ -1090,7 +1235,7 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 		Print(("header lines: %d%s"):format(count, st.moved and " (lines edited)" or ""))
 	end
 	st.active = true
-	st.icon:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+	SetIconCrop(st.icon, kindName)
 	if type(texture) == "function" then
 		texture(st.icon) -- e.g. SetPortraitTexture
 	else
@@ -1177,7 +1322,8 @@ local function OnUnit(tooltip, tooltipData)
 		return
 	end
 	ShowIcon(tooltip, tooltipData, "unit", function(icon)
-		SetPortraitTexture(icon, unit)
+		-- the third argument switches the round mask off: the portrait is square unless the option is on
+		SetPortraitTexture(icon, unit, not db.roundPortraits)
 	end)
 end
 
@@ -1308,10 +1454,17 @@ local function SlashCommand(msg)
 		return
 	end
 	value = tonumber(value)
-	if (cmd == "size" or cmd == "gap") and value and value >= 0 and value <= MAX_SIZE then
-		db[cmd] = value
-		wipe(layoutCache)
-		Print(("%s = %d"):format(cmd, value))
+	if cmd == "size" or cmd == "gap" then
+		local minValue, maxValue = ns.ICON_SIZE_MIN, ns.ICON_SIZE_MAX
+		if cmd == "gap" then
+			minValue, maxValue = ns.ICON_GAP_MIN, ns.ICON_GAP_MAX
+		end
+		if value and value >= minValue and value <= maxValue then
+			(cmd == "size" and ns.SetIconSize or ns.SetIconGap)(value)
+			Print(("%s = %d"):format(cmd, db[cmd]))
+		else
+			Print(("/tti %s: a number from %d to %d, now %d"):format(cmd, minValue, maxValue, db[cmd]))
+		end
 	else
 		Print(("icons %s, size = %d (minimum icon size), gap = %d"):format(db.enabled and "on" or "off", db.size, db.gap))
 		Print("/tti [options] | on | off | toggle | size <n> | gap <n> | reset | debug")
@@ -1385,17 +1538,31 @@ frame:SetScript("OnEvent", function(self, _, name)
 			db[key] = value
 		end
 	end
+	db.size = Clamped(db.size, MIN_ICON_SIZE, MAX_SIZE)
+	db.gap = Clamped(db.gap, 0, MAX_GAP)
 	if type(db.enabled) ~= "boolean" then
 		db.enabled = true
 	end
 	if type(db.unitClassColor) ~= "boolean" then
 		db.unitClassColor = true
 	end
+	if type(db.iconBorder) ~= "boolean" then
+		db.iconBorder = false
+	end
+	if type(db.roundPortraits) ~= "boolean" then
+		db.roundPortraits = false
+	end
+	for _, key in ipairs({ "spellNameOnly", "itemNameOnly", "toyNameOnly", "companionNameOnly", "mountNameOnly", "unitNameOnly" }) do
+		if type(db[key]) ~= "boolean" then
+			db[key] = false
+		end
+	end
 	if type(db.kinds) ~= "table" then
 		db.kinds = {}
 	end
 	if not db.unitModesRevised then
-		db.unitClassMode = db.unitClassMode == 4 and 2 or 1 -- only "icons" (old 4) and "faction on the class line" are left
+		-- old modes: 1 under the icon and 3 class color (gone: the default), 2 faction on the class line, 4 icons
+		db.unitClassMode = db.unitClassMode == 2 and 1 or 2
 		db.unitModesRevised = true
 	end
 	db.cache, db.cacheVersion = nil, nil -- the layout cache used to be saved

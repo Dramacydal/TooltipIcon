@@ -41,8 +41,8 @@ Esc → Options → AddOns → TooltipIcon, or `/tti`.
 - **Tooltip categories** — Spells, Buffs and debuffs, Items, Toys, Companion pets, Mounts, Transmog
   appearances, Units.
 - **Units:**
-  - **Player class and faction** — *Faction on the class line* (default) or *Class and faction icon on
-    the level line*.
+  - **Player class and faction** — *Class and faction icon on the level line* (default) or *Faction on
+    the class line*.
   - **Color player names by class** — on by default.
 
 ## Commands
