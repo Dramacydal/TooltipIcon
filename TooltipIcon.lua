@@ -82,6 +82,57 @@ local function DataLine(tooltipData, i)
 	return not processed and info or nil
 end
 
+-- Text and color of line `i`. In combat the line on the screen can be secret while the tooltip data still holds
+-- plain values: those are used then. Whatever stays secret is nil.
+local function LineValues(tooltip, tooltipData, i)
+	local line = Line(tooltip, "TextLeft", i)
+	local text = line:GetText()
+	local r, g, b = line:GetTextColor()
+	if issecret(text) or issecret(r) or issecret(g) or issecret(b) then
+		local info = DataLine(tooltipData, i)
+		if issecret(text) then
+			text = info and info.leftText
+		end
+		if issecret(r) or issecret(g) or issecret(b) then
+			local color = info and info.leftColor
+			if color and not issecret(color) then -- the color table itself can be secret
+				r, g, b = color.r, color.g, color.b
+			else
+				r, g, b = nil, nil, nil
+			end
+		end
+	end
+	if issecret(text) then
+		text = nil
+	end
+	if issecret(r) or issecret(g) or issecret(b) then
+		r, g, b = nil, nil, nil
+	end
+	return text, r, g, b
+end
+
+-- Height of a line: measured, or (when the measurement is secret) from the font of the line.
+local function LineHeightOf(line)
+	local height = Plain(line:GetStringHeight())
+	if height then
+		return height
+	end
+	local _, fontSize = line:GetFont()
+	return Plain(fontSize) or 12 -- measured: a header of three lines (14 + 12 + 12 + 2 x 2) is 42 high
+end
+
+-- Writes `prefix .. text` to a line. A secret text can't be joined in Lua, but SetFormattedText accepts it as
+-- an argument. Returns the text written, or nil when it is secret.
+local function SetLineText(line, prefix, text)
+	if issecret(text) then
+		line:SetFormattedText(prefix .. "%s", text)
+		return nil
+	end
+	local full = prefix .. text
+	line:SetText(full)
+	return full
+end
+
 local function Clamp(size)
 	return math.min(size, MAX_SIZE)
 end
@@ -90,7 +141,7 @@ local function EstimateBlockHeight(tooltip, count)
 	local height = 0
 	for i = 1, count do
 		local left, right = Line(tooltip, "TextLeft", i), Line(tooltip, "TextRight", i)
-		local h = Plain(left:GetStringHeight()) or 0
+		local h = LineHeightOf(left)
 		if right:IsShown() then
 			h = math.max(h, Plain(right:GetStringHeight()) or 0)
 		end
@@ -134,7 +185,7 @@ local function InitialPad(tooltip, kind, count, size, natural)
 	-- a line with a pad texture is taller than the texture by the space under the letters; kinds with a
 	-- body gap have their gap tuned by hand and keep the old formula
 	local descent = kinds[kind].bodyGap and 0 or PAD_DESCENT
-	return math.ceil(size - natural + gap - descent + (Plain(Line(tooltip, "TextLeft", count):GetStringHeight()) or 0))
+	return math.ceil(size - natural + gap - descent + LineHeightOf(Line(tooltip, "TextLeft", count)))
 end
 
 -- The tooltip is rebuilt every 0.2s. Layout values are measured once per header line count and cached
@@ -169,7 +220,7 @@ local function MinBlockHeight(tooltip, kind)
 	if cache then
 		return cache.natural
 	end
-	local first = Plain(Line(tooltip, "TextLeft", 1):GetStringHeight()) or 0
+	local first = LineHeightOf(Line(tooltip, "TextLeft", 1))
 	-- the height of a plain line from its font: inline icons make a line taller than the lines of other tooltips
 	local _, fontSize = Line(tooltip, "TextLeft", 2):GetFont()
 	local second = Plain(fontSize) and fontSize + 1 or first
@@ -196,8 +247,31 @@ end
 
 -- Inline texture width is not rendered 1:1 in every line font (the header font is larger),
 -- so the spacer is calibrated against the width the line actually reports.
-local function WidthSpacer(line, target)
+-- A line whose text is secret (combat) is indented with plain spaces: the client does not draw textures of an
+-- addon in such a line. The width of a space comes from a FontString of our own (its text is not secret).
+local spaceMeter
+local spaceWidths = {}
+
+local function SpaceWidth(line)
+	local font, size, flags = line:GetFont()
+	if not font or issecret(font) or not Plain(size) then
+		return 4
+	end
+	local key = font .. "|" .. size .. "|" .. tostring(flags)
+	if not spaceWidths[key] then
+		spaceMeter = spaceMeter or UIParent:CreateFontString(nil, "BACKGROUND")
+		spaceMeter:SetFont(font, size, flags)
+		spaceMeter:SetText(("          "):rep(2))
+		spaceWidths[key] = Plain(spaceMeter:GetStringWidth()) and spaceMeter:GetStringWidth() / 20 or 4
+	end
+	return math.max(spaceWidths[key], 1)
+end
+
+local function WidthSpacer(line, target, secretText)
 	local spacer = ("|T%s:1:%.1f|t"):format(SPACER, target)
+	if secretText then
+		return (" "):rep(math.max(1, math.floor(target / SpaceWidth(line) + 0.5)))
+	end
 	line:SetText(spacer)
 	local rendered = line:GetStringWidth()
 	if rendered and not issecret(rendered) and rendered > 0 and math.abs(rendered - target) > 0.5 then
@@ -288,10 +362,8 @@ local function ApplyLayout(tooltip, st, size, padH)
 	st.applied = {}
 	for i = 1, st.count do
 		local line = Line(tooltip, "TextLeft", i)
-		local widthSpacer = WidthSpacer(line, size + db.gap)
-		local text = widthSpacer .. (i == st.count and padSpacer or "") .. st.orig[i]
-		line:SetText(text)
-		st.applied[i] = text
+		local widthSpacer = WidthSpacer(line, size + db.gap, issecret(st.orig[i]))
+		st.applied[i] = SetLineText(line, widthSpacer .. (i == st.count and padSpacer or ""), st.orig[i])
 	end
 	-- the text of a taller line is centered; some kinds keep it at the top (the space goes below the header)
 	-- (both columns of the line: the right text would otherwise sink to the bottom of the taller line)
@@ -477,14 +549,12 @@ end)
 -- warnings ("Requires ...") are red. Word wrap and text length don't separate them.
 -- A white line with color codes or line breaks inside ("Reagents: <red names>") is a long, wrapping
 -- text, not a header field.
-local function IsColoredLine(tooltip, i)
-	local line = Line(tooltip, "TextLeft", i)
-	local text = line:GetText()
-	if text and not issecret(text) and (text:find("|c", 1, true) or text:find("|n", 1, true) or text:find("\n", 1, true)) then
+local function IsColoredLine(tooltip, tooltipData, i)
+	local text, r, g, b = LineValues(tooltip, tooltipData, i)
+	if text and (text:find("|c", 1, true) or text:find("|n", 1, true) or text:find("\n", 1, true)) then
 		return true
 	end
-	local r, g, b = line:GetTextColor()
-	if not r or issecret(r) or issecret(g) or issecret(b) then
+	if not r then
 		return false
 	end
 	return r < WHITE or g < WHITE or b < WHITE
@@ -492,9 +562,9 @@ end
 
 -- The rank line of a talent ("Rank 0/5") is a header line wherever it comes from; the format has no
 -- constant of its own that is known in this client, so it is recognised by its shape: text, number/number.
-local function IsTalentRankLine(tooltip, i)
-	local text = Line(tooltip, "TextLeft", i):GetText()
-	if not text or issecret(text) then
+local function IsTalentRankLine(tooltip, tooltipData, i)
+	local text = LineValues(tooltip, tooltipData, i)
+	if not text then
 		return false
 	end
 	text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") -- color codes may wrap the text
@@ -507,8 +577,8 @@ kinds.talent = {
 	maxHeader = 2,
 	category = "spell",
 	nameOnlyKey = "spellNameOnly",
-	isDescription = function(tooltip, _, i)
-		return not IsTalentRankLine(tooltip, i)
+	isDescription = function(tooltip, tooltipData, i)
+		return not IsTalentRankLine(tooltip, tooltipData, i)
 	end,
 }
 
@@ -516,18 +586,18 @@ kinds.spell = {
 	maxHeader = 3,
 	nameOnlyKey = "spellNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
-		if IsTalentRankLine(tooltip, i) then
+		if IsTalentRankLine(tooltip, tooltipData, i) then
 			return false
 		end
 		-- the header of a talent ends with its rank line
-		if i > 2 and IsTalentRankLine(tooltip, i - 1) then
+		if i > 2 and IsTalentRankLine(tooltip, tooltipData, i - 1) then
 			return true
 		end
 		local info = DataLine(tooltipData, i)
 		if info and info.type == Enum.TooltipDataLineType.SpellDescription then
 			return true
 		end
-		return IsColoredLine(tooltip, i)
+		return IsColoredLine(tooltip, tooltipData, i)
 	end,
 }
 
@@ -540,7 +610,7 @@ kinds.companion = {
 		if info and info.type == Enum.TooltipDataLineType.SpellDescription then
 			return true
 		end
-		return IsColoredLine(tooltip, i)
+		return IsColoredLine(tooltip, tooltipData, i)
 	end,
 }
 
@@ -553,7 +623,7 @@ kinds.mount = {
 		if info and info.type == Enum.TooltipDataLineType.SpellDescription then
 			return true
 		end
-		return IsColoredLine(tooltip, i)
+		return IsColoredLine(tooltip, tooltipData, i)
 	end,
 }
 
@@ -634,7 +704,7 @@ kinds.item = {
 		if info and itemHeaderTypes[info.type] then
 			return false
 		end
-		return not MatchesAny(Line(tooltip, "TextLeft", i):GetText(), itemHeaderPatterns)
+		return not MatchesAny((LineValues(tooltip, tooltipData, i)), itemHeaderPatterns)
 	end,
 	-- a promoted line ("Crafting Reagent", "Cosmetic") below the header is moved to the end of the header
 	isPromoted = function(text)
@@ -664,7 +734,7 @@ kinds.toy = {
 		if info and toyHeaderTypes[info.type] then
 			return false
 		end
-		return not MatchesAny(Line(tooltip, "TextLeft", i):GetText(), toyPromotedPatterns)
+		return not MatchesAny((LineValues(tooltip, tooltipData, i)), toyPromotedPatterns)
 	end,
 	isPromoted = function(text)
 		return MatchesAny(text, toyPromotedPatterns)
@@ -913,7 +983,7 @@ end
 -- Option "name only" for spells: only the name is next to the icon. The rank of a spell already stands in the
 -- right column of the name line; the rank line of a talent ("Rank 0/5") is moved there as well.
 local function EditSpellRank(tooltip, st, count)
-	if not db.spellNameOnly or count ~= 1 or tooltip:NumLines() < 2 or not IsTalentRankLine(tooltip, 2) then
+	if not db.spellNameOnly or count ~= 1 or tooltip:NumLines() < 2 or not IsTalentRankLine(tooltip, nil, 2) then
 		return count
 	end
 	local right = Line(tooltip, "TextRight", 1)
@@ -1205,11 +1275,11 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 	st.orig = {}
 	for i = 1, count do
 		local text = Line(tooltip, "TextLeft", i):GetText()
-		if not text or issecret(text) then
+		if text == nil then
 			Restore(tooltip, st)
 			return
 		end
-		st.orig[i] = text
+		st.orig[i] = text -- may be secret (combat): it is only passed on to SetFormattedText / SetText
 	end
 
 	st.kind, st.count = kindName, count
@@ -1242,6 +1312,13 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 		st.icon:SetTexture(texture)
 	end
 	local size, padH, natural, cached = Plan(tooltip, kindName, count)
+	-- a secret header line can't get the pad texture (see SpaceWidth): the icon is as high as the header block
+	for i = 1, count do
+		if issecret(st.orig[i]) then
+			size, padH = Clamp(math.max(natural, MIN_ICON_SIZE)), 0
+			break
+		end
+	end
 	st.natural, st.pass, st.fitPasses = natural, 0, 0
 	ApplyLayout(tooltip, st, size, padH)
 
