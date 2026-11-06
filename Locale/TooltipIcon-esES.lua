@@ -31,4 +31,6 @@ TTI_CLASS_MODE_2_DESC = "Se eliminan las líneas de clase y facción; antes de l
 TTI_OPTIONS_CLASS_COLOR = "Colorear los nombres de los jugadores por clase"
 TTI_OPTIONS_CLASS_COLOR_DESC = "El nombre de un jugador se colorea con el color de su clase."
 
+TTI_MSG_OVERWRITTEN = "Otro addon reescribe continuamente las líneas de las descripciones después de TooltipIcon, por lo que los iconos no pueden mostrarse correctamente. Lo sentimos: TooltipIcon no funcionará bien mientras ese addon esté activo o sus opciones de descripciones estén activadas."
+
 end

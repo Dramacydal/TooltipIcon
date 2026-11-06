@@ -31,4 +31,6 @@ TTI_CLASS_MODE_2_DESC = "删除职业行和阵营行；在等级行前显示阵�
 TTI_OPTIONS_CLASS_COLOR = "按职业为玩家名字着色"
 TTI_OPTIONS_CLASS_COLOR_DESC = "玩家名字以其职业颜色显示。"
 
+TTI_MSG_OVERWRITTEN = "另一个插件在 TooltipIcon 之后不断改写提示信息的行，因此图标无法正确显示。抱歉，只要该插件仍在运行或其提示信息选项处于开启状态，TooltipIcon 就无法正常工作。"
+
 end

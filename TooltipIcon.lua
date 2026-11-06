@@ -37,13 +37,17 @@ end
 local debugMode = false
 
 local function Print(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("TooltipIcon: " .. msg, .9, .9, .9)
+	DEFAULT_CHAT_FRAME:AddMessage("|cffff8000TooltipIcon:|r " .. msg, .9, .9, .9)
 end
 
 local missing = {} -- names of game constants this client doesn't have, shown by `/tti debug`
 local kinds = {} -- tooltip kinds, filled in below
 local states = {} -- [tooltip] = { icon, orig, count, size, pending }
 local pending = {}
+local HookProcessInfo -- hooks ProcessInfo of the tooltips again (defined below, needs the data handlers)
+local MAX_REHOOKS = 5 -- how many times the hooks are moved behind a later hooker of ProcessInfo
+local REHOOK_DELAY = 1 -- seconds between noticing a rewritten header and hooking again
+local rehooks, rehookScheduled, rehookGaveUp = 0, false, false
 
 --------------------------------------------------------------------------------
 -- LAYOUT
@@ -256,10 +260,13 @@ end
 local function ApplyLayout(tooltip, st, size, padH)
 	local padSpacer = padH > 0 and ("|T%s:%d:1|t"):format(SPACER, padH) or ""
 
+	st.applied = {}
 	for i = 1, st.count do
 		local line = Line(tooltip, "TextLeft", i)
 		local widthSpacer = WidthSpacer(line, size + db.gap)
-		line:SetText(widthSpacer .. (i == st.count and padSpacer or "") .. st.orig[i])
+		local text = widthSpacer .. (i == st.count and padSpacer or "") .. st.orig[i]
+		line:SetText(text)
+		st.applied[i] = text
 	end
 	-- the text of a taller line is centered; some kinds keep it at the top (the space goes below the header)
 	-- (both columns of the line: the right text would otherwise sink to the bottom of the taller line)
@@ -376,6 +383,19 @@ local function Correct(tooltip, st)
 	return true
 end
 
+-- The header lines hold the text we wrote last (st.applied). When one of them differs, some other addon has
+-- rewritten it after us: it hooks ProcessInfo behind our hook. Hooks can't be removed, but a new hook
+-- stands behind every earlier one, and the older hooks of ours are switched off (see HookProcessInfo).
+local function HeaderOverwritten(tooltip, st)
+	for i = 1, st.count do
+		local text = Line(tooltip, "TextLeft", i):GetText()
+		if not issecret(text) and text ~= st.applied[i] then
+			return true
+		end
+	end
+	return false
+end
+
 local driver = CreateFrame("Frame")
 driver:Hide()
 driver:SetScript("OnUpdate", function(self)
@@ -388,7 +408,30 @@ driver:SetScript("OnUpdate", function(self)
 	for _, tooltip in ipairs(list) do
 		local st = states[tooltip]
 		if st and st.active and tooltip:IsShown() then
-			if FitHeader(tooltip, st) or (not st.cached and not Correct(tooltip, st)) then
+			local overwritten = HeaderOverwritten(tooltip, st)
+			if debugMode then
+				local text = Line(tooltip, "TextLeft", 1):GetText()
+				Print(("header check %s: %s, line 1 = %s"):format(st.kind, overwritten and "OVERWRITTEN" or "intact",
+					issecret(text) and "<secret>" or (tostring(text):gsub("|", "||"))))
+			end
+			if overwritten then
+				if rehooks < MAX_REHOOKS and not rehookScheduled then
+					rehookScheduled = true
+					rehooks = rehooks + 1
+					if debugMode then
+						Print(("header lines were rewritten after us: hooking ProcessInfo again in %d s (%d)"):format(
+							REHOOK_DELAY, rehooks))
+					end
+					C_Timer.After(REHOOK_DELAY, function()
+						rehookScheduled = false
+						HookProcessInfo()
+					end)
+				elseif rehooks >= MAX_REHOOKS and not rehookScheduled and not rehookGaveUp then
+					-- the last hook was rewritten as well: another addon keeps changing the lines after us
+					rehookGaveUp = true
+					Print(TTI_MSG_OVERWRITTEN)
+				end
+			elseif FitHeader(tooltip, st) or (not st.cached and not Correct(tooltip, st)) then
 				pending[tooltip] = true
 				self:Show()
 			end
@@ -1275,6 +1318,58 @@ local function SlashCommand(msg)
 	end
 end
 
+-- Tooltip data is processed by TooltipDataHandlerMixin:ProcessInfo: it adds the lines, runs all post-calls of
+-- all addons (in the order they registered, which we can't control: Leatrix Plus rewrites the lines of unit
+-- tooltips there) and returns. A post-hook of ProcessInfo therefore runs after every post-call, whatever the
+-- load order of the addons is, and sees the lines in their final state.
+local dataHandlers = {} -- [Enum.TooltipDataType] = function(tooltip, tooltipData)
+
+for typeName, handler in pairs({
+	Spell = OnSpell, Macro = OnMacro, UnitAura = OnAura, Item = OnItem, CompanionPet = OnCompanion,
+	Unit = OnUnit, Mount = OnMount, Toy = OnToy,
+}) do
+	local dataType = Enum.TooltipDataType[typeName]
+	if dataType then
+		dataHandlers[dataType] = handler
+	end
+end
+
+local hookGeneration = 0
+
+local function OnProcessInfo(tooltip, info)
+	local tooltipData = type(info) == "table" and info.tooltipData
+	local handler = tooltipData and dataHandlers[tooltipData.type]
+	if handler then
+		handler(tooltip, tooltipData)
+	end
+end
+
+-- Every call hooks ProcessInfo of the tooltips once more and makes the earlier hooks do nothing.
+HookProcessInfo = function()
+	hookGeneration = hookGeneration + 1
+	local generation = hookGeneration
+	for tooltip in pairs(states) do
+		if tooltip.ProcessInfo then
+			hooksecurefunc(tooltip, "ProcessInfo", function(...)
+				if generation == hookGeneration then
+					OnProcessInfo(...)
+				end
+			end)
+		end
+	end
+end
+
+local function RegisterHandlers()
+	HookProcessInfo()
+	hooksecurefunc(GameTooltip, "Show", OnShowOwnedByTalent)
+	if CollectionWardrobeUtil and CollectionWardrobeUtil.SetAppearanceTooltip then
+		hooksecurefunc(CollectionWardrobeUtil, "SetAppearanceTooltip", OnSetAppearanceTooltip)
+	end
+	if GameTooltip.SetCompanionPet then
+		hooksecurefunc(GameTooltip, "SetCompanionPet", OnSetCompanionPet)
+	end
+end
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 frame:SetScript("OnEvent", function(self, _, name)
@@ -1313,31 +1408,7 @@ frame:SetScript("OnEvent", function(self, _, name)
 	HookTooltip(ShoppingTooltip2)
 	HookTooltip(ItemRefShoppingTooltip1)
 	HookTooltip(ItemRefShoppingTooltip2)
-	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, OnSpell)
-	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Macro, OnMacro)
-	if Enum.TooltipDataType.UnitAura then
-		TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.UnitAura, OnAura)
-	end
-	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnItem)
-	if Enum.TooltipDataType.CompanionPet then
-		TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.CompanionPet, OnCompanion)
-	end
-	hooksecurefunc(GameTooltip, "Show", OnShowOwnedByTalent)
-	if CollectionWardrobeUtil and CollectionWardrobeUtil.SetAppearanceTooltip then
-		hooksecurefunc(CollectionWardrobeUtil, "SetAppearanceTooltip", OnSetAppearanceTooltip)
-	end
-	if GameTooltip.SetCompanionPet then
-		hooksecurefunc(GameTooltip, "SetCompanionPet", OnSetCompanionPet)
-	end
-	if Enum.TooltipDataType.Unit then
-		TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, OnUnit)
-	end
-	if Enum.TooltipDataType.Mount then
-		TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Mount, OnMount)
-	end
-	if Enum.TooltipDataType.Toy then
-		TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Toy, OnToy)
-	end
+	RegisterHandlers()
 
 	if ns.RegisterSettings then
 		ns.RegisterSettings()

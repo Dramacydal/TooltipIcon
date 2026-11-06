@@ -30,3 +30,5 @@ TTI_CLASS_MODE_2 = "Class and faction icon on the level line"
 TTI_CLASS_MODE_2_DESC = "The class line and the faction line are removed; the faction crest and the class icon are shown before the level line."
 TTI_OPTIONS_CLASS_COLOR = "Color player names by class"
 TTI_OPTIONS_CLASS_COLOR_DESC = "The name of a player is colored with the class color."
+
+TTI_MSG_OVERWRITTEN = "Another addon keeps rewriting the tooltip lines after TooltipIcon, so the icons cannot be displayed correctly. Sorry, TooltipIcon will not work properly until that addon is disabled or its tooltip options are turned off."

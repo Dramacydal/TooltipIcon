@@ -31,4 +31,6 @@ TTI_CLASS_MODE_2_DESC = "Klassen- und Fraktionszeile entfallen; vor der Stufenze
 TTI_OPTIONS_CLASS_COLOR = "Spielernamen nach Klasse einfärben"
 TTI_OPTIONS_CLASS_COLOR_DESC = "Der Name eines Spielers wird in der Klassenfarbe dargestellt."
 
+TTI_MSG_OVERWRITTEN = "Ein anderes Addon überschreibt die Tooltip-Zeilen immer wieder nach TooltipIcon, daher können die Symbole nicht korrekt angezeigt werden. Entschuldigung: TooltipIcon funktioniert nicht richtig, solange dieses Addon aktiv ist oder dessen Tooltip-Optionen eingeschaltet sind."
+
 end
