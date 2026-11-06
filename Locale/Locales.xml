@@ -1,0 +1,10 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/
+..\FrameXML\UI.xsd">
+	<!-- enUS first: it defines every text; the others override it for their client language -->
+	<Script file="TooltipIcon-enUS.lua"/>
+	<Script file="TooltipIcon-ruRU.lua"/>
+	<Script file="TooltipIcon-deDE.lua"/>
+	<Script file="TooltipIcon-frFR.lua"/>
+	<Script file="TooltipIcon-esES.lua"/>
+	<Script file="TooltipIcon-zhCN.lua"/>
+</Ui>

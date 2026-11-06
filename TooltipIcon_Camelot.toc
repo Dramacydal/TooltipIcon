@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: TooltipIcon
+## Notes: Draws the icon inside the tooltip (spells, auras, items, toys, pets, mounts, transmog), top-left, with the header lines shifted to the right
+## Author: Dramacydal
+## Version: 1.0.0
+## SavedVariables: TooltipIconDB
+
+Locale\Locales.xml
+
+TooltipIcon.lua
+Settings.lua

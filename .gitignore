@@ -1,0 +1,24 @@
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Release packaging output
+.release/
+*.zip
+
+# Local tooling
+.codemap.tags
+.claude/settings.local.json
+
+# Backups
+*.bak
+*.orig
+*.tmp
