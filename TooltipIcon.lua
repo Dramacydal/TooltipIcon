@@ -12,15 +12,18 @@ local LINE_SPACING = 2 -- estimate for the first, uncached layout
 local MAX_SIZE = 64
 local MIN_ICON_SIZE = 16 -- lowest value of the minimum icon size
 local MAX_GAP = 16 -- highest gap between the icon and the text
-local FACTION_ICON_SIZE = 16 -- faction crest inside a text line
-local CLASS_ICON_SIZE = 14 -- class icon inside a text line
-local INLINE_ICON_OFFSET = -2 -- their horizontal shift (the texture margins make them look indented)
+local INLINE_SIZE_MIN, INLINE_SIZE_MAX = 10, 32 -- class and faction icons inside a text line
+local INLINE_OFFSET_MIN, INLINE_OFFSET_MAX = -10, 10 -- their horizontal shift
 local MAX_FIT_PASSES = 2 -- width corrections per tooltip build
 local PAD_DESCENT = 4 -- measured: a line is 4 px taller than its pad texture
 local MAX_PASSES = 3 -- layout correction passes per uncached header line count
 local CROP = 0.07 -- trims the built-in dark border of spell icons (unless "Show the icon border" is on)
 
-local defaults = { size = 32, gap = 6, unitClassMode = 2 } -- 2: class and faction icon on the level line
+-- unitClassMode 2: class and faction icon on the level line; the offset -2 compensates the texture margins
+local defaults = {
+	size = 32, gap = 6, unitClassMode = 2,
+	classIconSize = 16, classIconOffset = -2, factionIconSize = 20, factionIconOffset = -2,
+}
 local db
 
 local GetSpellTexture = C_Spell and C_Spell.GetSpellTexture or GetSpellTexture
@@ -363,7 +366,13 @@ local function ApplyLayout(tooltip, st, size, padH)
 	for i = 1, st.count do
 		local line = Line(tooltip, "TextLeft", i)
 		local widthSpacer = WidthSpacer(line, size + db.gap, issecret(st.orig[i]))
-		st.applied[i] = SetLineText(line, widthSpacer .. (i == st.count and padSpacer or ""), st.orig[i])
+		local text = st.orig[i]
+		local icons = st.inlineIcons
+		if padH > 0 and icons and icons.line == i and not issecret(text) and text:sub(1, #icons.prefix) == icons.prefix then
+			local _, fontSize = line:GetFont()
+			text = (icons.build(Plain(fontSize) or 12)) .. text:sub(#icons.prefix + 1)
+		end
+		st.applied[i] = SetLineText(line, widthSpacer .. (i == st.count and padSpacer or ""), text)
 	end
 	-- the text of a taller line is centered; some kinds keep it at the top (the space goes below the header)
 	-- (both columns of the line: the right text would otherwise sink to the bottom of the taller line)
@@ -700,11 +709,17 @@ kinds.item = {
 	maxHeader = 4,
 	nameOnlyKey = "itemNameOnly",
 	isDescription = function(tooltip, tooltipData, i)
+		local text = LineValues(tooltip, tooltipData, i)
+		-- a line of several rows (the crafted item of a recipe: a line break, then the item name) is not a
+		-- header field, whatever its type is
+		if text and (text:find("\n", 1, true) or text:find("|n", 1, true)) then
+			return true
+		end
 		local info = DataLine(tooltipData, i)
 		if info and itemHeaderTypes[info.type] then
 			return false
 		end
-		return not MatchesAny((LineValues(tooltip, tooltipData, i)), itemHeaderPatterns)
+		return not MatchesAny(text, itemHeaderPatterns)
 	end,
 	-- a promoted line ("Crafting Reagent", "Cosmetic") below the header is moved to the end of the header
 	isPromoted = function(text)
@@ -794,15 +809,15 @@ end
 -- The lines that follow the header are shifted up; the last line is left blank.
 local BLANK_LINE = { text = "", r = 1, g = 1, b = 1, rightText = "", rr = 1, rg = 1, rb = 1, rightShown = false }
 
-local function ClassIconMarkup(classFile, size, offsetX)
+local function ClassIconMarkup(classFile, size, offsetX, offsetY)
 	local atlas = "classicon-" .. classFile:lower()
 	if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas) then
-		return CreateAtlasMarkup(atlas, size, size, offsetX, 0) .. " "
+		return CreateAtlasMarkup(atlas, size, size, offsetX, offsetY) .. " "
 	end
 	local coords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[classFile]
 	if coords and CreateTextureMarkup then
 		return CreateTextureMarkup("Interface/GLUES/CHARACTERCREATE/UI-CHARACTERCREATE-CLASSES", 256, 256, size, size,
-			coords[1], coords[2], coords[3], coords[4], offsetX, 0) .. " "
+			coords[1], coords[2], coords[3], coords[4], offsetX, offsetY) .. " "
 	end
 end
 
@@ -837,14 +852,14 @@ local FACTION_ICON_FILES = {
 	Alliance = "Interface/TargetingFrame/UI-PVP-Alliance",
 }
 
-local function FactionIconMarkup(factionGroup, size, offsetX)
+local function FactionIconMarkup(factionGroup, size, offsetX, offsetY)
 	local file = FACTION_ICON_FILES[factionGroup]
 	if file and CreateTextureMarkup then
-		return CreateTextureMarkup(file, 64, 64, size, size, 0, 0.59375, 0, 0.59375, offsetX, 0) .. " "
+		return CreateTextureMarkup(file, 64, 64, size, size, 0, 0.59375, 0, 0.59375, offsetX, offsetY) .. " "
 	end
 end
 
-local function EditPlayerLines(tooltip, count)
+local function EditPlayerLines(tooltip, st, count)
 	local mode = db.unitClassMode
 	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
 	if not unit or issecret(unit) or not UnitExists(unit) or not UnitIsPlayer(unit) then
@@ -884,15 +899,28 @@ local function EditPlayerLines(tooltip, count)
 
 	-- mode 2: the class line is removed; a faction crest and a class icon go to the start of the level line and
 	-- the faction line is removed too (only when there is a crest to show instead)
-	local classMarkup = ClassIconMarkup(classFile, CLASS_ICON_SIZE, INLINE_ICON_OFFSET)
-	if not classMarkup then
+	-- In a padded line the text and the icons are aligned to the top of the line: the center of an icon is lower
+	-- than the center of the text by (icon - font size) / 2. `fontSize` is given for such a line.
+	local function Lift(size, fontSize)
+		return fontSize and math.floor((size - fontSize) / 2 + 0.5) or 0
+	end
+	local function Markup(fontSize)
+		local classMarkup = ClassIconMarkup(classFile, db.classIconSize, db.classIconOffset,
+			Lift(db.classIconSize, fontSize))
+		local factionMarkup = hasFactionLine and factionGroup and not issecret(factionGroup)
+			and FactionIconMarkup(factionGroup, db.factionIconSize, db.factionIconOffset,
+				Lift(db.factionIconSize, fontSize))
+		return classMarkup and (factionMarkup or "") .. classMarkup, factionMarkup
+	end
+	local prefix, factionMarkup = Markup()
+	if not prefix then
 		return
 	end
-	local factionMarkup = hasFactionLine and factionGroup and not issecret(factionGroup)
-		and FactionIconMarkup(factionGroup, FACTION_ICON_SIZE, INLINE_ICON_OFFSET)
 
 	local level = Line(tooltip, "TextLeft", count)
-	level:SetText((factionMarkup or "") .. classMarkup .. level:GetText())
+	level:SetText(prefix .. level:GetText())
+	-- ApplyLayout swaps the prefix for a lifted one when the line gets a pad
+	st.inlineIcons = { line = count, prefix = prefix, build = Markup }
 	DropLines(tooltip, classIndex, numLines, factionMarkup and 2 or 1)
 end
 
@@ -1003,6 +1031,7 @@ kinds.spell.edit = EditSpellRank
 kinds.talent.edit = EditSpellRank
 
 local function EditUnitLines(tooltip, st, count)
+	st.inlineIcons = nil
 	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
 	if not unit or issecret(unit) or not UnitExists(unit) or not SnapshotLines(tooltip, st) then
 		return count
@@ -1012,7 +1041,7 @@ local function EditUnitLines(tooltip, st, count)
 	local nameOnly = db.unitNameOnly
 	if UnitIsPlayer(unit) then
 		if not nameOnly then
-			EditPlayerLines(tooltip, count)
+			EditPlayerLines(tooltip, st, count)
 		end
 		MovePlayerPvp(tooltip, count)
 		ColorPlayerName(tooltip, unit)
@@ -1158,6 +1187,8 @@ end
 
 ns.ICON_SIZE_MIN, ns.ICON_SIZE_MAX = MIN_ICON_SIZE, MAX_SIZE
 ns.ICON_GAP_MIN, ns.ICON_GAP_MAX = 0, MAX_GAP
+ns.INLINE_SIZE_MIN, ns.INLINE_SIZE_MAX = INLINE_SIZE_MIN, INLINE_SIZE_MAX
+ns.INLINE_OFFSET_MIN, ns.INLINE_OFFSET_MAX = INLINE_OFFSET_MIN, INLINE_OFFSET_MAX
 
 local function Clamped(value, minValue, maxValue)
 	return math.min(math.max(math.floor(value + 0.5), minValue), maxValue)
@@ -1175,6 +1206,26 @@ end
 function ns.SetIconGap(value)
 	db.gap = Clamped(value, 0, MAX_GAP)
 	wipe(layoutCache)
+end
+
+-- sizes and shifts of the class and faction icons inside the level line
+for _, icon in ipairs({ "class", "faction" }) do
+	local Name = icon:gsub("^%l", string.upper)
+	local sizeKey, offsetKey = icon .. "IconSize", icon .. "IconOffset"
+	ns["Get" .. Name .. "IconSize"] = function()
+		return db[sizeKey]
+	end
+	ns["Set" .. Name .. "IconSize"] = function(value)
+		db[sizeKey] = Clamped(value, INLINE_SIZE_MIN, INLINE_SIZE_MAX)
+		wipe(layoutCache)
+	end
+	ns["Get" .. Name .. "IconOffset"] = function()
+		return db[offsetKey]
+	end
+	ns["Set" .. Name .. "IconOffset"] = function(value)
+		db[offsetKey] = Clamped(value, INLINE_OFFSET_MIN, INLINE_OFFSET_MAX)
+		wipe(layoutCache)
+	end
 end
 
 function ns.IsUnitClassColor()
@@ -1617,6 +1668,10 @@ frame:SetScript("OnEvent", function(self, _, name)
 	end
 	db.size = Clamped(db.size, MIN_ICON_SIZE, MAX_SIZE)
 	db.gap = Clamped(db.gap, 0, MAX_GAP)
+	for _, icon in ipairs({ "class", "faction" }) do
+		db[icon .. "IconSize"] = Clamped(db[icon .. "IconSize"], INLINE_SIZE_MIN, INLINE_SIZE_MAX)
+		db[icon .. "IconOffset"] = Clamped(db[icon .. "IconOffset"], INLINE_OFFSET_MIN, INLINE_OFFSET_MAX)
+	end
 	if type(db.enabled) ~= "boolean" then
 		db.enabled = true
 	end

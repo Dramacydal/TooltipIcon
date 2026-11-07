@@ -53,7 +53,7 @@ function ns.RegisterSettings()
 		if initializer and initializer.AddModifyPredicate then
 			initializer:AddModifyPredicate(MasterOn)
 		end
-		return setting
+		return setting, initializer
 	end
 
 	AddSlider("ICON_SIZE", TTI_OPTIONS_ICON_SIZE, TTI_OPTIONS_ICON_SIZE_DESC, 32, ns.ICON_SIZE_MIN, ns.ICON_SIZE_MAX, 1,
@@ -133,6 +133,23 @@ function ns.RegisterSettings()
 				return setting:GetValue()
 			end)
 			roundInitializer:AddModifyPredicate(MasterOn)
+
+			-- sizes and shifts of the icons on the level line
+			for _, icon in ipairs({ "FACTION", "CLASS" }) do
+				local Name = icon:sub(1, 1) .. icon:sub(2):lower()
+				local sizeDefault, offsetDefault = icon == "CLASS" and 16 or 20, -2
+				local _, sizeInitializer = AddSlider(icon .. "_ICON_SIZE", _G["TTI_OPTIONS_" .. icon .. "_ICON_SIZE"],
+					_G["TTI_OPTIONS_" .. icon .. "_ICON_SIZE_DESC"], sizeDefault, ns.INLINE_SIZE_MIN, ns.INLINE_SIZE_MAX,
+					1, ns["Get" .. Name .. "IconSize"], ns["Set" .. Name .. "IconSize"])
+				local _, offsetInitializer = AddSlider(icon .. "_ICON_OFFSET", _G["TTI_OPTIONS_" .. icon .. "_ICON_OFFSET"],
+					_G["TTI_OPTIONS_" .. icon .. "_ICON_OFFSET_DESC"], offsetDefault, ns.INLINE_OFFSET_MIN,
+					ns.INLINE_OFFSET_MAX, 1, ns["Get" .. Name .. "IconOffset"], ns["Set" .. Name .. "IconOffset"])
+				for _, child in ipairs({ sizeInitializer, offsetInitializer }) do
+					child:SetParentInitializer(initializer, function()
+						return setting:GetValue()
+					end)
+				end
+			end
 		end
 	end
 
