@@ -362,6 +362,7 @@ end
 local function ApplyLayout(tooltip, st, size, padH)
 	local padSpacer = padH > 0 and ("|T%s:%d:1|t"):format(SPACER, padH) or ""
 
+	local previous = st.applied or {}
 	st.applied = {}
 	for i = 1, st.count do
 		local line = Line(tooltip, "TextLeft", i)
@@ -371,6 +372,12 @@ local function ApplyLayout(tooltip, st, size, padH)
 		if padH > 0 and icons and icons.line == i and not issecret(text) and text:sub(1, #icons.prefix) == icons.prefix then
 			local _, fontSize = line:GetFont()
 			text = (icons.build(Plain(fontSize) or 12)) .. text:sub(#icons.prefix + 1)
+		end
+		-- the game appends text to a line after us (the key binding of a bag): it stays
+		local current, written = line:GetText(), previous[i]
+		if written and not issecret(text) and current and not issecret(current) and current ~= written
+			and current:sub(1, #written) == written then
+			text = text .. current:sub(#written + 1)
 		end
 		st.applied[i] = SetLineText(line, widthSpacer .. (i == st.count and padSpacer or ""), text)
 	end
@@ -492,10 +499,19 @@ end
 -- The header lines hold the text we wrote last (st.applied). When one of them differs, some other addon has
 -- rewritten it after us: it hooks ProcessInfo behind our hook. Hooks can't be removed, but a new hook
 -- stands behind every earlier one, and the older hooks of ours are switched off (see HookProcessInfo).
+local lastMismatch -- what the last check found: kind, line, expected and actual text
+local function Escaped(text)
+	return (tostring(text):gsub("|", "||"):gsub("\n", "\\n"))
+end
+
 local function HeaderOverwritten(tooltip, st)
 	for i = 1, st.count do
 		local text = Line(tooltip, "TextLeft", i):GetText()
-		if not issecret(text) and text ~= st.applied[i] then
+		local written = st.applied[i]
+		-- text appended to the line (the key binding of a bag) is not a rewrite
+		if not issecret(text) and text ~= written and not (written and text and text:sub(1, #written) == written) then
+			lastMismatch = ("%s line %d/%d: expected [%s], found [%s]"):format(st.kind, i, st.count,
+				Escaped(st.applied[i]), Escaped(text))
 			return true
 		end
 	end
@@ -525,6 +541,7 @@ driver:SetScript("OnUpdate", function(self)
 					rehookScheduled = true
 					rehooks = rehooks + 1
 					if debugMode then
+						Print(lastMismatch)
 						Print(("header lines were rewritten after us: hooking ProcessInfo again in %d s (%d)"):format(
 							REHOOK_DELAY, rehooks))
 					end
@@ -1371,6 +1388,7 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 		end
 	end
 	st.natural, st.pass, st.fitPasses = natural, 0, 0
+	st.applied = nil
 	ApplyLayout(tooltip, st, size, padH)
 
 	st.cached = cached
