@@ -14,4 +14,4 @@
 5. Unit tooltips are rearranged first (`EditUnitLines`): class and faction lines become inline icons on the level line, PvP / Skinnable move to the right column, the name is class-colored.
 
 ## Inline icons on the level line
-Sizes and shifts come from `db.classIcon*` / `db.factionIcon*`. In a padded line (text aligned to the top) the icons are lifted by `(icon size - font size) / 2` through the `yOffset` of the markup; `EditPlayerLines` keeps the builder in `st.inlineIcons`, `ApplyLayout` swaps the prefix.
+Sizes and shifts come from `db.classIcon*` / `db.factionIcon*`. The last header line that holds them keeps the default vertical alignment (the client centers icons and text); the pad texture only raises the line to the portrait height.

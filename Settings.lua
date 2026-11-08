@@ -134,6 +134,13 @@ function ns.RegisterSettings()
 			end)
 			roundInitializer:AddModifyPredicate(MasterOn)
 
+			local _, skipInitializer = AddCheckbox("SKIP_BG_ENEMIES", TTI_OPTIONS_SKIP_BG_ENEMIES,
+				TTI_OPTIONS_SKIP_BG_ENEMIES_DESC, ns.IsSkipBgEnemies, ns.SetSkipBgEnemies, false)
+			skipInitializer:SetParentInitializer(initializer, function()
+				return setting:GetValue()
+			end)
+			skipInitializer:AddModifyPredicate(MasterOn)
+
 			-- sizes and shifts of the icons on the level line
 			for _, icon in ipairs({ "FACTION", "CLASS" }) do
 				local Name = icon:sub(1, 1) .. icon:sub(2):lower()

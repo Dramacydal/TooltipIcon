@@ -40,6 +40,7 @@ local function Plain(value)
 end
 
 local debugMode = false
+local debugCycle = 0 -- number of the debug output of one tooltip build, see ShowIcon
 
 local function Print(msg)
 	DEFAULT_CHAT_FRAME:AddMessage("|cffff8000TooltipIcon:|r " .. msg, .9, .9, .9)
@@ -140,11 +141,17 @@ local function Clamp(size)
 	return math.min(size, MAX_SIZE)
 end
 
+-- Height of the inline class / faction icons of line i of a unit tooltip (0: the line has none).
+local function InlineIconHeight(tooltip, i)
+	local icons = states[tooltip] and states[tooltip].inlineIcons
+	return icons and icons.line == i and icons.height or 0
+end
+
 local function EstimateBlockHeight(tooltip, count)
 	local height = 0
 	for i = 1, count do
 		local left, right = Line(tooltip, "TextLeft", i), Line(tooltip, "TextRight", i)
-		local h = LineHeightOf(left)
+		local h = math.max(LineHeightOf(left), InlineIconHeight(tooltip, i))
 		if right:IsShown() then
 			h = math.max(h, Plain(right:GetStringHeight()) or 0)
 		end
@@ -205,8 +212,14 @@ local function KindCache(kind)
 	return cache
 end
 
-local function GetCache(kind, count)
-	local cache = KindCache(kind)[count]
+-- A header with inline icons is taller than one without: the cache keeps them apart.
+local function CacheKey(tooltip, count)
+	local icons = states[tooltip] and states[tooltip].inlineIcons
+	return icons and icons.line <= count and (count .. "/" .. icons.height) or count
+end
+
+local function GetCache(tooltip, kind, count)
+	local cache = KindCache(kind)[CacheKey(tooltip, count)]
 	if cache and cache.size == db.size then
 		return cache
 	end
@@ -219,7 +232,7 @@ local function MinBlockHeight(tooltip, kind)
 	if not lines or (kinds[kind].nameOnlyKey and db[kinds[kind].nameOnlyKey]) then
 		return 0
 	end
-	local cache = GetCache(kind, lines)
+	local cache = GetCache(tooltip, kind, lines)
 	if cache then
 		return cache.natural
 	end
@@ -227,7 +240,11 @@ local function MinBlockHeight(tooltip, kind)
 	-- the height of a plain line from its font: inline icons make a line taller than the lines of other tooltips
 	local _, fontSize = Line(tooltip, "TextLeft", 2):GetFont()
 	local second = Plain(fontSize) and fontSize + 1 or first
-	return first + (lines - 1) * (second + LINE_SPACING)
+	local height = first + (lines - 1) * LINE_SPACING
+	for i = 2, lines do
+		height = height + math.max(second, InlineIconHeight(tooltip, i))
+	end
+	return height
 end
 
 -- icon size for a header block of the given natural height
@@ -237,7 +254,7 @@ end
 
 -- returns size, padHeight, natural block height, isCached
 local function Plan(tooltip, kind, count)
-	local cache = GetCache(kind, count)
+	local cache = GetCache(tooltip, kind, count)
 	local natural = cache and cache.natural or EstimateBlockHeight(tooltip, count)
 	local size = TargetSize(tooltip, kind, natural)
 	local padH = 0
@@ -366,13 +383,9 @@ local function ApplyLayout(tooltip, st, size, padH)
 	st.applied = {}
 	for i = 1, st.count do
 		local line = Line(tooltip, "TextLeft", i)
-		local widthSpacer = WidthSpacer(line, size + db.gap, issecret(st.orig[i]))
+		local indent = st.crestLine == i and st.crestIndent or 0 -- room for the crest drawn by coordinates
+		local widthSpacer = WidthSpacer(line, size + db.gap + indent, issecret(st.orig[i]))
 		local text = st.orig[i]
-		local icons = st.inlineIcons
-		if padH > 0 and icons and icons.line == i and not issecret(text) and text:sub(1, #icons.prefix) == icons.prefix then
-			local _, fontSize = line:GetFont()
-			text = (icons.build(Plain(fontSize) or 12)) .. text:sub(#icons.prefix + 1)
-		end
 		-- the game appends text to a line after us (the key binding of a bag): it stays
 		local current, written = line:GetText(), previous[i]
 		if written and not issecret(text) and current and not issecret(current) and current ~= written
@@ -383,12 +396,14 @@ local function ApplyLayout(tooltip, st, size, padH)
 	end
 	-- the text of a taller line is centered; some kinds keep it at the top (the space goes below the header)
 	-- (both columns of the line: the right text would otherwise sink to the bottom of the taller line)
+	-- (a last line with inline icons stays centered: the client aligns the icons and the text itself)
 	if kinds[st.kind].padTop then
-		Line(tooltip, "TextLeft", st.count):SetJustifyV(padH > 0 and "TOP" or st.origJustifyV)
-		Line(tooltip, "TextRight", st.count):SetJustifyV(padH > 0 and "TOP" or st.origRightJustifyV)
+		local top = padH > 0 and not (st.inlineIcons and st.inlineIcons.line == st.count)
+		Line(tooltip, "TextLeft", st.count):SetJustifyV(top and "TOP" or st.origJustifyV)
+		Line(tooltip, "TextRight", st.count):SetJustifyV(top and "TOP" or st.origRightJustifyV)
 		-- the right text is centered on the line: it needs the same height to stand at the top as well
 		if st.origRightText then
-			Line(tooltip, "TextRight", st.count):SetText(padSpacer .. st.origRightText)
+			Line(tooltip, "TextRight", st.count):SetText((top and padSpacer or "") .. st.origRightText)
 		end
 	end
 
@@ -401,6 +416,19 @@ local function ApplyLayout(tooltip, st, size, padH)
 	st.size, st.padH = size, padH
 	st.icon:SetSize(size, size)
 	st.icon:Show()
+	if st.crest then
+		if st.crestLine then
+			-- a texture of its own at the start of the line (an inline texture is not drawn in a secret line)
+			st.crest:SetTexture(st.crestFile)
+			st.crest:SetTexCoord(0, 0.59375, 0, 0.59375)
+			st.crest:SetSize(st.crestSize, st.crestSize)
+			st.crest:ClearAllPoints()
+			st.crest:SetPoint("LEFT", Line(tooltip, "TextLeft", st.crestLine), "LEFT", size + db.gap + db.factionIconOffset, 0)
+			st.crest:Show()
+		else
+			st.crest:Hide()
+		end
+	end
 	tooltip:Show() -- relayout
 end
 
@@ -460,6 +488,9 @@ local function Restore(tooltip, st)
 		st.moved = nil
 	end
 	st.icon:Hide()
+	if st.crest then
+		st.crest:Hide()
+	end
 end
 
 -- Compares the layout with the real one (only available a frame later) and adjusts it.
@@ -492,7 +523,7 @@ local function Correct(tooltip, st)
 		return false
 	end
 
-	KindCache(st.kind)[st.count] = { size = db.size, natural = natural, padH = st.padH }
+	KindCache(st.kind)[CacheKey(tooltip, st.count)] = { size = db.size, natural = natural, padH = st.padH }
 	return true
 end
 
@@ -533,8 +564,11 @@ driver:SetScript("OnUpdate", function(self)
 			local overwritten = HeaderOverwritten(tooltip, st)
 			if debugMode then
 				local text = Line(tooltip, "TextLeft", 1):GetText()
-				Print(("header check %s: %s, line 1 = %s"):format(st.kind, overwritten and "OVERWRITTEN" or "intact",
+				Print(("header check #%s %s: %s, line 1 = %s"):format(tostring(st.cycle), st.kind, overwritten and "OVERWRITTEN" or "intact",
 					issecret(text) and "<secret>" or (tostring(text):gsub("|", "||"))))
+				Print(("icon #%s: shown=%s visible=%s alpha=%s size=%sx%s tooltip alpha=%s"):format(tostring(st.cycle), tostring(st.icon:IsShown()),
+					tostring(st.icon:IsVisible()), tostring(Plain(st.icon:GetAlpha())), tostring(Plain(st.icon:GetWidth())),
+					tostring(Plain(st.icon:GetHeight())), tostring(Plain(tooltip:GetAlpha()))))
 			end
 			if overwritten then
 				if rehooks < MAX_REHOOKS and not rehookScheduled then
@@ -660,6 +694,11 @@ kinds.transmog = {
 }
 
 -- Only the aura name sits next to the icon for now; see `/tti debug` for the line layout of auras.
+-- Currency: only the name is next to the icon, the description and the totals are below
+kinds.currency = {
+	maxHeader = 1,
+	isDescription = function() return true end,
+}
 kinds.aura = {
 	maxHeader = 1,
 	isDescription = function() return true end,
@@ -678,13 +717,16 @@ for _, name in ipairs({ "ItemName", "ItemQuality", "ItemLevel", "ItemUpgradeLeve
 	end
 end
 
--- format string -> pattern: escape magic characters, %d / %s become wildcards
+-- format string -> pattern: escape magic characters, %d / %s become wildcards;
+-- positional arguments (%1$d) and plural forms (|4one:few:many;) of other locales are handled too
 local function BuildPatterns(names)
 	local patterns = {}
 	for _, name in ipairs(names) do
 		local text = _G[name]
 		if type(text) == "string" then
-			local pattern = text:gsub("[%^%$%(%)%.%[%]%*%+%-%?]", "%%%0"):gsub("%%d", "%%d+"):gsub("%%s", ".+")
+			local pattern = text:gsub("%%%d%$", "%%"):gsub("|4[^;]*;", "\1")
+			pattern = pattern:gsub("[%^%$%(%)%.%[%]%*%+%-%?]", "%%%0"):gsub("%%d", "%%d+"):gsub("%%s", ".+")
+			pattern = pattern:gsub("\1", "%%S+")
 			patterns[#patterns + 1] = "^" .. pattern .. "$"
 		else
 			missing[#missing + 1] = name
@@ -800,9 +842,10 @@ local function IsCreatureTypeLine(tooltip, i)
 end
 
 -- The level line: a "Level ..." text from the game's templates, or any line that holds the level of the unit
--- and its creature type ("Pet Level 1 Critter" of a pet, which has no template of its own).
-local function IsUnitLevelLine(tooltip, i)
-	local text = Line(tooltip, "TextLeft", i):GetText()
+-- and its creature type or race ("Pet Level 1 Critter" of a pet; a player's line in a locale whose templates
+-- differ from the patterns).
+local function IsUnitLevelLine(tooltip, i, tooltipData)
+	local text = LineValues(tooltip, tooltipData, i) -- a secret line on the screen: its text from the data
 	if not text or issecret(text) then
 		return false
 	end
@@ -811,13 +854,39 @@ local function IsUnitLevelLine(tooltip, i)
 	end
 	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
 	if not unit or issecret(unit) or not UnitExists(unit) then
+		-- The unit is hidden (a battleground match): a player's race comes from the GUID of the data and must be in
+		-- the line; for other units (a pet) the first line with a number is the level line.
+		local guid = tooltipData and tooltipData.guid
+		local race = guid and not issecret(guid) and GetPlayerInfoByGUID and select(3, GetPlayerInfoByGUID(guid))
+		local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+		if not plain:find("%d") and not plain:find("??", 1, true) then -- the level: digits, or "??" above ours
+			return false
+		end
+		if race and not issecret(race) and race ~= "" then
+			return plain:find(race, 1, true) ~= nil
+		end
+		return true
+	end
+	-- the level and the creature type or, for a player, the race
+	local level = UnitLevel(unit)
+	local kind = UnitIsPlayer(unit) and UnitRace(unit) or UnitCreatureType(unit)
+	local kindHidden = issecret(kind) -- the race of an enemy player: the level alone has to do
+	if not level or issecret(level) then
 		return false
 	end
-	local level, creatureType = UnitLevel(unit), UnitCreatureType(unit)
-	if not level or level < 1 or not creatureType or issecret(level) or issecret(creatureType) then
+	if kindHidden then
+		kind = nil
+	end
+	-- the color code of the level ("|cffffd100") ends with digits that would stick to the level
+	text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	-- the game writes "??" instead of the level when it is far above ours, whatever UnitLevel returns
+	local hasLevel = (level >= 1 and text:find("%f[%d]" .. level .. "%f[%D]")) or text:find("??", 1, true)
+	if not hasLevel then
 		return false
 	end
-	return text:find("%f[%d]" .. level .. "%f[%D]") ~= nil and text:find(creatureType, 1, true) ~= nil
+	-- an NPC: the type of the creature may be on the next line
+	return (kind and text:find(kind, 1, true) ~= nil) or kindHidden
+		or (i < tooltip:NumLines() and IsCreatureTypeLine(tooltip, i + 1))
 end
 
 -- Player class / faction handling (setting db.unitClassMode, see ns.unitClassModes):
@@ -825,16 +894,18 @@ end
 -- 2 the class line and the faction line are removed, a faction crest and a class icon are put before the level line.
 -- The lines that follow the header are shifted up; the last line is left blank.
 local BLANK_LINE = { text = "", r = 1, g = 1, b = 1, rightText = "", rr = 1, rg = 1, rb = 1, rightShown = false }
+-- an empty line of the full height of a line (a space; an empty text is only a few pixels high)
+local SPACE_LINE = { text = " ", r = 1, g = 1, b = 1, rightText = "", rr = 1, rg = 1, rb = 1, rightShown = false }
 
-local function ClassIconMarkup(classFile, size, offsetX, offsetY)
+local function ClassIconMarkup(classFile, size, offsetX)
 	local atlas = "classicon-" .. classFile:lower()
 	if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas) then
-		return CreateAtlasMarkup(atlas, size, size, offsetX, offsetY) .. " "
+		return CreateAtlasMarkup(atlas, size, size, offsetX, 0) .. " "
 	end
 	local coords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[classFile]
 	if coords and CreateTextureMarkup then
 		return CreateTextureMarkup("Interface/GLUES/CHARACTERCREATE/UI-CHARACTERCREATE-CLASSES", 256, 256, size, size,
-			coords[1], coords[2], coords[3], coords[4], offsetX, offsetY) .. " "
+			coords[1], coords[2], coords[3], coords[4], offsetX, 0) .. " "
 	end
 end
 
@@ -869,20 +940,63 @@ local FACTION_ICON_FILES = {
 	Alliance = "Interface/TargetingFrame/UI-PVP-Alliance",
 }
 
-local function FactionIconMarkup(factionGroup, size, offsetX, offsetY)
+local function FactionIconMarkup(factionGroup, size, offsetX)
 	local file = FACTION_ICON_FILES[factionGroup]
 	if file and CreateTextureMarkup then
-		return CreateTextureMarkup(file, 64, 64, size, size, 0, 0.59375, 0, 0.59375, offsetX, offsetY) .. " "
+		return CreateTextureMarkup(file, 64, 64, size, size, 0, 0.59375, 0, 0.59375, offsetX, 0) .. " "
 	end
 end
 
-local function EditPlayerLines(tooltip, st, count)
-	local mode = db.unitClassMode
-	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
-	if not unit or issecret(unit) or not UnitExists(unit) or not UnitIsPlayer(unit) then
+-- The class line of a player, found by its text: the line after the level line holds a localized class name
+-- (the unit and its GUID are not needed). Returns the class name and the class file.
+local classByName
+
+local function ClassFromText(tooltip, count)
+	if count + 1 > tooltip:NumLines() then
 		return
 	end
-	local className, classFile = UnitClass(unit)
+	local text = Line(tooltip, "TextLeft", count + 1):GetText()
+	if not text or issecret(text) then
+		return
+	end
+	if not classByName then
+		classByName = {}
+		for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
+			for classFile, name in pairs(list) do
+				classByName[name] = classFile
+			end
+		end
+	end
+	local classFile = classByName[(text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))]
+	return classFile and text, classFile
+end
+
+-- The player of a tooltip: the unit, or (when the unit is hidden) the values of its GUID: class name, class file,
+-- race ..., the race ID last.
+local function PlayerClass(tooltip, tooltipData)
+	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
+	if unit and not issecret(unit) and UnitExists(unit) then
+		if UnitIsPlayer(unit) then
+			return unit, UnitClass(unit)
+		end
+		return unit
+	end
+	local guid = tooltipData and tooltipData.guid
+	if guid and not issecret(guid) and guid:find("^Player%-") and GetPlayerInfoByGUID then
+		return nil, GetPlayerInfoByGUID(guid)
+	end
+end
+
+local function EditPlayerLines(tooltip, st, count, tooltipData)
+	local mode = db.unitClassMode
+	-- the 9th value: the race ID of a player found by the GUID
+	local unit, className, classFile, _, _, _, _, _, raceID = PlayerClass(tooltip, tooltipData)
+	if not className or issecret(className) or issecret(classFile) then
+		className, classFile = ClassFromText(tooltip, count) -- the class of the unit is hidden: the text of its line
+	end
+	if not className then
+		return
+	end
 	local classIndex = count + 1 -- the class line follows the level line
 	local numLines = tooltip:NumLines()
 	if not className or not classFile or issecret(className) or issecret(classFile) or classIndex > numLines then
@@ -894,7 +1008,21 @@ local function EditPlayerLines(tooltip, st, count)
 	end
 
 	-- the faction line follows the class line
-	local factionGroup, factionName = UnitFactionGroup(unit)
+	local factionGroup, factionName
+	if unit then
+		factionGroup, factionName = UnitFactionGroup(unit)
+	else
+		-- the faction of the race (GUID), else the text of the line
+		local info = raceID and C_CreatureInfo and C_CreatureInfo.GetFactionInfo and C_CreatureInfo.GetFactionInfo(raceID)
+		if info and not issecret(info) then
+			factionGroup, factionName = info.groupTag, info.name
+		elseif classIndex < numLines then
+			local text = Line(tooltip, "TextLeft", classIndex + 1):GetText()
+			if not issecret(text) and (text == FACTION_ALLIANCE or text == FACTION_HORDE) then
+				factionGroup, factionName = text == FACTION_ALLIANCE and "Alliance" or "Horde", text
+			end
+		end
+	end
 	local factionIndex = classIndex + 1
 	local hasFactionLine = false
 	if factionName and not issecret(factionName) and factionIndex <= numLines then
@@ -916,17 +1044,10 @@ local function EditPlayerLines(tooltip, st, count)
 
 	-- mode 2: the class line is removed; a faction crest and a class icon go to the start of the level line and
 	-- the faction line is removed too (only when there is a crest to show instead)
-	-- In a padded line the text and the icons are aligned to the top of the line: the center of an icon is lower
-	-- than the center of the text by (icon - font size) / 2. `fontSize` is given for such a line.
-	local function Lift(size, fontSize)
-		return fontSize and math.floor((size - fontSize) / 2 + 0.5) or 0
-	end
-	local function Markup(fontSize)
-		local classMarkup = ClassIconMarkup(classFile, db.classIconSize, db.classIconOffset,
-			Lift(db.classIconSize, fontSize))
+	local function Markup()
+		local classMarkup = ClassIconMarkup(classFile, db.classIconSize, db.classIconOffset)
 		local factionMarkup = hasFactionLine and factionGroup and not issecret(factionGroup)
-			and FactionIconMarkup(factionGroup, db.factionIconSize, db.factionIconOffset,
-				Lift(db.factionIconSize, fontSize))
+			and FactionIconMarkup(factionGroup, db.factionIconSize, db.factionIconOffset)
 		return classMarkup and (factionMarkup or "") .. classMarkup, factionMarkup
 	end
 	local prefix, factionMarkup = Markup()
@@ -935,9 +1056,24 @@ local function EditPlayerLines(tooltip, st, count)
 	end
 
 	local level = Line(tooltip, "TextLeft", count)
-	level:SetText(prefix .. level:GetText())
-	-- ApplyLayout swaps the prefix for a lifted one when the line gets a pad
-	st.inlineIcons = { line = count, prefix = prefix, build = Markup }
+	local levelText = level:GetText()
+	if not levelText or issecret(levelText) then
+		return
+	end
+	level:SetText(prefix .. levelText)
+	st.inlineIcons = {
+		line = count,
+		height = math.max(db.classIconSize, factionMarkup and db.factionIconSize or 0),
+	}
+	if count < kinds.unit.minLines then
+		-- the header is shorter than the portrait: the class line stays as an empty line of the header, so the
+		-- client lays the lines out by itself (instead of a pad texture on the last line); only the faction line goes
+		SetLineState(tooltip, classIndex, SPACE_LINE)
+		if factionMarkup then
+			DropLines(tooltip, classIndex + 1, numLines, 1)
+		end
+		return count + 1
+	end
 	DropLines(tooltip, classIndex, numLines, factionMarkup and 2 or 1)
 end
 
@@ -967,24 +1103,51 @@ local function MoveSkinnable(tooltip, count)
 	return true
 end
 
+-- Names of all factions of the reputation data: the line of an NPC that holds one of them is its faction.
+local factionNames
+
+local function IsFactionName(text)
+	if not factionNames then
+		factionNames = {}
+		if C_Reputation and C_Reputation.GetFactionDataByID then
+			for id = 1, 3500 do
+				local data = C_Reputation.GetFactionDataByID(id)
+				local name = data and data.name
+				if name and not issecret(name) and name ~= "" then
+					factionNames[name] = true
+				end
+			end
+		end
+	end
+	return factionNames[(text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))] == true
+end
+
 local function EditNpcLines(tooltip, count)
 	if MoveSkinnable(tooltip, count) then
 		return count
 	end
+	local numLines = tooltip:NumLines()
 	local factionIndex, pvpIndex = count + 1, count + 2
-	if count >= kinds.unit.maxHeader or pvpIndex > tooltip:NumLines()
-		or not MatchesAny(Line(tooltip, "TextLeft", pvpIndex):GetText(), pvpPatterns) then
+	if count >= kinds.unit.maxHeader or factionIndex > numLines then
 		return count
 	end
 	local factionText = Line(tooltip, "TextLeft", factionIndex):GetText()
 	if not factionText or issecret(factionText) or factionText == "" then
 		return count
 	end
-	local pvp, right = GetLineState(tooltip, pvpIndex), Line(tooltip, "TextRight", factionIndex)
-	right:SetText(pvp.text)
-	right:SetTextColor(pvp.r, pvp.g, pvp.b)
-	right:Show()
-	DropLines(tooltip, pvpIndex, tooltip:NumLines(), 1)
+	-- the faction joins the header when it is followed by "PvP" or when its text is the name of a faction
+	local hasPvp = pvpIndex <= numLines and MatchesAny(Line(tooltip, "TextLeft", pvpIndex):GetText(), pvpPatterns)
+	if not hasPvp and not IsFactionName(factionText) then
+		return count
+	end
+	if hasPvp then
+		-- "PvP" moves to the right column of the faction line
+		local pvp, right = GetLineState(tooltip, pvpIndex), Line(tooltip, "TextRight", factionIndex)
+		right:SetText(pvp.text)
+		right:SetTextColor(pvp.r, pvp.g, pvp.b)
+		right:Show()
+		DropLines(tooltip, pvpIndex, numLines, 1)
+	end
 	return factionIndex
 end
 
@@ -1011,11 +1174,10 @@ end
 
 -- Option "Color player names by class": the name of a player gets the class color. Only the name is colored:
 -- the "PvP" text in the right column of the name line keeps its own color.
-local function ColorPlayerName(tooltip, unit)
+local function ColorPlayerName(tooltip, classFile)
 	if not db.unitClassColor then
 		return
 	end
-	local _, classFile = UnitClass(unit)
 	if not classFile or issecret(classFile) then
 		return
 	end
@@ -1047,27 +1209,179 @@ end
 kinds.spell.edit = EditSpellRank
 kinds.talent.edit = EditSpellRank
 
-local function EditUnitLines(tooltip, st, count)
-	st.inlineIcons = nil
-	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
-	if not unit or issecret(unit) or not UnitExists(unit) or not SnapshotLines(tooltip, st) then
+-- A pet has a line of the type "owner" (its type stays readable when the text is secret).
+local function HasOwnerLine(tooltipData, numLines)
+	local ownerType = Enum.TooltipDataLineType.UnitOwner
+	for i = 2, numLines do
+		local info = DataLine(tooltipData, i)
+		if info and ownerType and info.type == ownerType then
+			return true
+		end
+	end
+	return false
+end
+
+-- A battleground: every player is flagged, and the "PvP" line is the last line of the tooltip.
+-- Its text is secret here: it is handed to the right column of the name line and the line itself is emptied
+-- (the lines below can't be moved up, a blank row stays).
+local function MoveSecretPvp(tooltip, count, tooltipData)
+	local _, instanceType = IsInInstance()
+	local isPlayer = UnitIsPlayer("mouseover")
+	local numLines = tooltip:NumLines()
+	if instanceType ~= "pvp" or count + 1 > numLines then
+		return
+	end
+	-- a player, or a pet (it has the line of its owner)
+	if issecret(isPlayer) or not (isPlayer or HasOwnerLine(tooltipData, numLines)) then
+		return
+	end
+	local left = Line(tooltip, "TextLeft", numLines) -- the last line
+	local text = left:GetText()
+	if not issecret(text) then
+		return -- a readable text is moved by MovePlayerPvp
+	end
+	local right = Line(tooltip, "TextRight", 1)
+	local rightText = right:IsShown() and right:GetText()
+	if rightText and (issecret(rightText) or rightText ~= "") then
+		return
+	end
+	right:SetFormattedText("%s", text)
+	right:Show()
+	pcall(right.SetTextColor, right, left:GetTextColor())
+	left:SetText("")
+end
+
+-- A player in a battleground, everything secret: the lines end with level, class, faction, "PvP". The faction is
+-- plain through the unit ("mouseover"): its crest is drawn at the start of the class line (mode 2; a texture of
+-- its own, the text of the line is indented) or its text goes to the right column of the class line (mode 1), and
+-- the faction line is emptied. Returns the new header count.
+local function HideSecretFaction(tooltip, st, count)
+	local _, instanceType = IsInInstance()
+	local isPlayer = UnitIsPlayer("mouseover")
+	local numLines = tooltip:NumLines()
+	if instanceType ~= "pvp" or issecret(isPlayer) or not isPlayer or count ~= numLines - 1 or numLines < 5 then
+		return count
+	end
+	local factionLine = Line(tooltip, "TextLeft", count)
+	local factionText = factionLine:GetText()
+	if not issecret(factionText) then
+		return count -- a readable text is handled by EditPlayerLines
+	end
+	local factionGroup = UnitFactionGroup("mouseover")
+	if not factionGroup or issecret(factionGroup) then
+		-- the opposite of the own faction for an enemy
+		local mine, enemy = UnitFactionGroup("player"), UnitIsEnemy("player", "mouseover")
+		if not mine or issecret(mine) or issecret(enemy) then
+			return count
+		end
+		factionGroup = enemy and (mine == "Horde" and "Alliance" or "Horde") or mine
+	end
+	if db.unitClassMode == 1 then
+		local right = Line(tooltip, "TextRight", count - 1) -- the class line
+		right:SetFormattedText("%s", factionText)
+		right:Show()
+		pcall(right.SetTextColor, right, factionLine:GetTextColor())
+	else
+		local file = FACTION_ICON_FILES[factionGroup]
+		if not file then
+			return count
+		end
+		local size = db.factionIconSize
+		st.crest = st.crest or tooltip:CreateTexture(nil, "OVERLAY")
+		st.crestLine, st.crestFile, st.crestSize = count - 1, file, size
+		st.crestIndent = math.max(size + db.factionIconOffset + 2, 0)
+	end
+	factionLine:SetText("")
+	return count - 1
+end
+
+-- A header of two lines gets an empty third line right after it, whatever the two lines are: the client then
+-- lays the lines out by itself and the portrait has the height of three lines. The line is added at the end and
+-- moved up (the lines below shift down); the text of the lines is readable here (the lines were snapshotted).
+local function PadHeader(tooltip, st, count)
+	if count ~= 2 or tooltip:NumLines() < 2 then
+		return count
+	end
+	tooltip:AddLine(" ")
+	local added = tooltip:NumLines()
+	if st.moved then
+		st.moved.states[added], st.moved.from = BLANK_LINE, added -- restored as an empty line
+	end
+	if added > 3 and not MoveLine(tooltip, added, 3) then
+		return count
+	end
+	return 3
+end
+
+local function EditUnitLines(tooltip, st, count, tooltipData)
+	local unit, _, classFile = PlayerClass(tooltip, tooltipData)
+	if not unit and not classFile then
+		_, classFile = ClassFromText(tooltip, count) -- the unit is hidden and there is no GUID: the class line
+	end
+	local isPlayer = classFile ~= nil -- a player, also when the unit itself is hidden
+	if not (unit or isPlayer) then
+		MoveSecretPvp(tooltip, count, tooltipData)
+		return HideSecretFaction(tooltip, st, count)
+	end
+	if not SnapshotLines(tooltip, st) then
 		return count
 	end
 	-- with "name only" the lines below the name are not rearranged (the faction, class and level lines stay
 	-- as they are); the PvP text still goes next to the name of a player and the name keeps the class color
 	local nameOnly = db.unitNameOnly
-	if UnitIsPlayer(unit) then
+	if isPlayer then
+		local newCount
 		if not nameOnly then
-			EditPlayerLines(tooltip, st, count)
+			newCount = EditPlayerLines(tooltip, st, count, tooltipData)
 		end
 		MovePlayerPvp(tooltip, count)
-		ColorPlayerName(tooltip, unit)
-		return count
+		ColorPlayerName(tooltip, classFile)
+		return PadHeader(tooltip, st, newCount or count)
 	end
 	if nameOnly then
 		return count
 	end
-	return EditNpcLines(tooltip, count)
+	local newCount = EditNpcLines(tooltip, count)
+	if newCount == count then
+		-- no faction line took the "PvP" text (a pet): it goes next to the name as with players
+		MovePlayerPvp(tooltip, count)
+	end
+	return PadHeader(tooltip, st, newCount)
+end
+
+-- Everything is secret (a battleground match): the text of the lines can't be read, their types can. The lines
+-- of a player are counted by what stays readable of the unit; for other units the plain lines after the name
+-- (owner and level of a pet) make the header, as many as the kind allows; a line of another type ends it.
+local function SecretUnitHeaderCount(tooltip, tooltipData, numLines)
+	local _, instanceType = IsInInstance()
+	-- A player: whether it is one and whether it has a guild stays readable through "mouseover", so the lines are
+	-- known: name, guild, level, class, faction ("PvP" and the rest stay below).
+	local isPlayer = UnitIsPlayer("mouseover")
+	if not issecret(isPlayer) and isPlayer then
+		-- in a battleground the last line of a player is always "PvP": everything before it is the header
+		if instanceType == "pvp" then
+			return math.max(numLines - 1, 1)
+		end
+		local guild = GetGuildInfo("mouseover")
+		if not issecret(guild) then
+			return math.min(1 + (guild and 1 or 0) + 3, numLines)
+		end
+	end
+	-- a pet in a battleground: the last line is "PvP" as well
+	if instanceType == "pvp" and HasOwnerLine(tooltipData, numLines) then
+		return math.max(numLines - 1, 1)
+	end
+	local lineTypes = Enum.TooltipDataLineType
+	local count = 1
+	for i = 2, math.min(kinds.unit.maxHeader, numLines) do
+		local info = DataLine(tooltipData, i)
+		local lineType = info and info.type
+		if lineType ~= nil and lineType ~= lineTypes.None and lineType ~= lineTypes.UnitOwner then
+			break
+		end
+		count = i
+	end
+	return count
 end
 
 kinds.unit = {
@@ -1078,12 +1392,30 @@ kinds.unit = {
 	bodyGap = 4, -- the body starts 4 px lower than the header block (the portrait keeps its size)
 	padTop = true, -- the last header line keeps its text at the top: the extra height goes below the header
 	edit = EditUnitLines,
-	headerCount = function(tooltip)
+	headerCount = function(tooltip, tooltipData)
 		local numLines = tooltip:NumLines()
+		if debugMode then
+			local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
+			local exists = unit and not issecret(unit) and UnitExists(unit)
+			local level = exists and UnitLevel(unit)
+			local race = exists and UnitRace(unit)
+			Print(("level line search: unit=%s exists=%s level=%s race=%s lines=%d"):format(
+				not unit and "nil" or issecret(unit) and "<secret>" or tostring(unit), tostring(exists),
+				issecret(level) and "<secret>" or tostring(level), issecret(race) and "<secret>" or tostring(race), numLines))
+		end
 		for i = 2, math.min(4, numLines) do
-			if IsUnitLevelLine(tooltip, i) then
+			local found = IsUnitLevelLine(tooltip, i, tooltipData)
+			if debugMode then
+				local text = LineValues(tooltip, tooltipData, i)
+				Print(("level line search: line %d %s [%s]"):format(i, found and "FOUND" or "no",
+					text and (text:gsub("|", "||")) or "<secret>"))
+			end
+			if found then
 				return (i < numLines and IsCreatureTypeLine(tooltip, i + 1)) and i + 1 or i
 			end
+		end
+		if LineValues(tooltip, tooltipData, 2) == nil then
+			return SecretUnitHeaderCount(tooltip, tooltipData, numLines)
 		end
 		return 1
 	end,
@@ -1163,6 +1495,7 @@ ns.kindList = {
 	{ "companion", TTI_KIND_COMPANION, TTI_KIND_COMPANION_DESC },
 	{ "mount", TTI_KIND_MOUNT, TTI_KIND_MOUNT_DESC },
 	{ "transmog", TTI_KIND_TRANSMOG, TTI_KIND_TRANSMOG_DESC },
+	{ "currency", TTI_KIND_CURRENCY, TTI_KIND_CURRENCY_DESC },
 	{ "unit", TTI_KIND_UNIT, TTI_KIND_UNIT_DESC },
 }
 
@@ -1188,6 +1521,14 @@ end
 
 function ns.SetRoundPortraits(value)
 	db.roundPortraits = value and true or false
+end
+
+function ns.IsSkipBgEnemies()
+	return db.skipBgEnemies
+end
+
+function ns.SetSkipBgEnemies(value)
+	db.skipBgEnemies = value and true or false
 end
 
 function ns.IsIconBorder()
@@ -1302,6 +1643,11 @@ end
 local function ShowIcon(tooltip, tooltipData, kindName, texture)
 	local st = states[tooltip]
 	if debugMode then
+		debugCycle = debugCycle + 1
+		if st then
+			st.cycle = debugCycle
+		end
+		Print(("======== #%d %s t=%.2f ========"):format(debugCycle, kindName, GetTime()))
 		local id = tooltipData and tooltipData.id
 		Print(("%s: %s, id=%s, icon=%s"):format(kindName, tooltip:GetName() or "?",
 			issecret(id) and "<secret>" or tostring(id), tostring(texture)))
@@ -1332,12 +1678,13 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 	end
 
 	local kind = kinds[kindName]
+	st.inlineIcons, st.crestLine = nil, nil
 	local count = GetHeaderCount(tooltip, tooltipData, kind)
 	if kind.isPromoted and count < MaxHeader(kind) then
 		count = PromoteLine(tooltip, tooltipData, st, kind, count)
 	end
 	if kind.edit then
-		count = kind.edit(tooltip, st, count) or count -- a kind may move lines into the header
+		count = kind.edit(tooltip, st, count, tooltipData) or count -- a kind may move lines into the header
 	end
 
 	st.orig = {}
@@ -1444,6 +1791,17 @@ local function OnMount(tooltip, tooltipData)
 	ShowIcon(tooltip, tooltipData, "mount", MountTexture(tooltipData and tooltipData.id))
 end
 
+local function CurrencyTexture(currencyID)
+	if currencyID and not issecret(currencyID) and C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo then
+		local info = C_CurrencyInfo.GetCurrencyInfo(currencyID)
+		return info and info.iconFileID
+	end
+end
+
+local function OnCurrency(tooltip, tooltipData)
+	ShowIcon(tooltip, tooltipData, "currency", CurrencyTexture(tooltipData and tooltipData.id))
+end
+
 -- Transmog tooltips are built by CollectionWardrobeUtil.SetAppearanceTooltip without tooltip data.
 -- The icon is the one of the primary source's item, or of the first source.
 local function OnSetAppearanceTooltip(tooltip, appearanceData, primarySourceID)
@@ -1462,15 +1820,137 @@ local function OnSetAppearanceTooltip(tooltip, appearanceData, primarySourceID)
 end
 
 -- the portrait of the displayed unit, drawn into the icon texture by SetPortraitTexture
+local lastPortraitInfo
+
+-- /tti debug: when the texture of the portrait changes, with the time
+local function DebugPortraitTexture(st, label)
+	if debugMode then
+		local key = tostring(st.icon:GetTexture())
+		if key ~= st.lastPortraitTexture then
+			st.lastPortraitTexture = key
+			Print(("portrait texture [%s]: %s, try %s, t=%.2f"):format(label, key, tostring(st.portraitTries), GetTime()))
+		end
+	end
+end
+
+-- An enemy player or pet in a battleground (what the "skip" option leaves untouched): readable through the plain
+-- unit calls, whatever is secret about the unit; a pet has the line of its owner in the data.
+local function IsBattlegroundEnemy(tooltip, unit, tooltipData)
+	local _, instanceType = IsInInstance()
+	if instanceType ~= "pvp" then
+		return false
+	end
+	local isEnemy = UnitIsEnemy("player", unit)
+	if issecret(isEnemy) or not isEnemy then
+		return false
+	end
+	local isPlayer = UnitIsPlayer(unit)
+	if not issecret(isPlayer) and isPlayer then
+		return true
+	end
+	return HasOwnerLine(tooltipData, tooltip:NumLines())
+end
+
 local function OnUnit(tooltip, tooltipData)
 	local unit = TooltipUtil and TooltipUtil.GetDisplayedUnit and select(2, TooltipUtil.GetDisplayedUnit(tooltip))
-	if not unit or issecret(unit) or not UnitExists(unit) then
+	if unit and issecret(unit) then
+		-- the identity of an enemy player is hidden in a battleground match: SetPortraitTexture takes a secret token
+		-- only from untainted code, a plain "mouseover" works (the tooltip is shown for the unit under the mouse)
+		unit = "mouseover"
+	end
+	local exists = unit and UnitExists(unit)
+	if not unit or (not issecret(exists) and not exists) then
+		if debugMode then
+			Print(("unit tooltip skipped: unit=%s"):format(not unit and "nil" or tostring(unit) .. " (does not exist)"))
+		end
+		return
+	end
+	if db.skipBgEnemies and IsBattlegroundEnemy(tooltip, unit, tooltipData) then
+		if debugMode then
+			Print("unit tooltip skipped: an enemy player or pet in a battleground (option)")
+		end
 		return
 	end
 	ShowIcon(tooltip, tooltipData, "unit", function(icon)
 		-- the third argument switches the round mask off: the portrait is square unless the option is on
 		SetPortraitTexture(icon, unit, not db.roundPortraits)
+		states[tooltip].portraitUnit, states[tooltip].portraitTries = unit, 0
+		DebugPortraitTexture(states[tooltip], "build")
+		if debugMode then
+			local guid, visible = UnitGUID(unit), UnitIsVisible(unit)
+			local identity = C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret and C_Secrets.ShouldUnitIdentityBeSecret(unit)
+			local info = ("portrait: unit=%s guid=%s visible=%s identitySecret=%s"):format(tostring(unit),
+				issecret(guid) and "<secret>" or tostring(guid), issecret(visible) and "<secret>" or tostring(visible),
+				tostring(identity))
+			if info ~= lastPortraitInfo then -- once per change, not per rebuild
+				lastPortraitInfo = info
+				Print(info)
+			end
+		end
 	end)
+end
+
+-- The data of a portrait may arrive after the tooltip is shown (an enemy player far away): it is requested
+-- again when the client reports an update, as the unit frames do, and a few times while the tooltip stays
+-- (a tooltip that is not rebuilt would keep an empty portrait).
+local PORTRAIT_RETRIES, PORTRAIT_RETRY_DELAY = 20, 0.05
+
+-- Asks for the portrait again, but only while the unit exists: after the mouse has left, the tooltip fades
+-- out and an empty "mouseover" would clear the portrait at once.
+local function RequestPortrait(st)
+	local unit = st.portraitUnit
+	if not unit then
+		return
+	end
+	local exists = UnitExists(unit)
+	if not issecret(exists) and exists then
+		SetPortraitTexture(st.icon, unit, not db.roundPortraits)
+		DebugPortraitTexture(st, "retry")
+	end
+end
+
+local portraitFrame = CreateFrame("Frame")
+local portraitElapsed = 0
+portraitFrame:SetScript("OnUpdate", function(_, elapsed)
+	portraitElapsed = portraitElapsed + elapsed
+	if portraitElapsed < PORTRAIT_RETRY_DELAY then
+		return
+	end
+	portraitElapsed = 0
+	for tooltip, st in pairs(states) do
+		local unit = st.portraitUnit
+		if unit and (st.portraitTries or PORTRAIT_RETRIES) < PORTRAIT_RETRIES and st.active and st.kind == "unit"
+			and tooltip:IsShown() then
+			st.portraitTries = st.portraitTries + 1
+			RequestPortrait(st)
+		end
+	end
+end)
+portraitFrame:RegisterEvent("UNIT_PORTRAIT_UPDATE")
+portraitFrame:RegisterEvent("UNIT_MODEL_CHANGED")
+portraitFrame:SetScript("OnEvent", function(_, _, changed)
+	if not changed or issecret(changed) then
+		return
+	end
+	for tooltip, st in pairs(states) do
+		local unit = st.portraitUnit
+		-- in a battleground the result of the comparison can be secret: it is not tested then
+		if unit and st.active and st.kind == "unit" and tooltip:IsShown() then
+			local same = UnitIsUnit(unit, changed)
+			if not issecret(same) and same then
+				RequestPortrait(st)
+			end
+		end
+	end
+end)
+
+-- The portrait of a unit is also requested whenever the tooltip is shown: a request made while the tooltip
+-- data is processed gave no portrait of an enemy player in a battleground.
+local function RefreshPortraitOnShow(tooltip)
+	local st = states[tooltip]
+	if st and st.active and st.kind == "unit" then
+		RequestPortrait(st)
+	end
 end
 
 -- The talent window of ClassicUIForever builds its tooltip by hand (SetText / AddLine), so no tooltip data
@@ -1539,6 +2019,9 @@ local function OnCleared(tooltip)
 			st.paddingAdded = nil
 		end
 		st.icon:Hide()
+		if st.crest then
+			st.crest:Hide()
+		end
 		pending[tooltip] = nil
 	end
 end
@@ -1625,7 +2108,7 @@ local dataHandlers = {} -- [Enum.TooltipDataType] = function(tooltip, tooltipDat
 
 for typeName, handler in pairs({
 	Spell = OnSpell, Macro = OnMacro, UnitAura = OnAura, Item = OnItem, CompanionPet = OnCompanion,
-	Unit = OnUnit, Mount = OnMount, Toy = OnToy,
+	Unit = OnUnit, Mount = OnMount, Toy = OnToy, Currency = OnCurrency,
 }) do
 	local dataType = Enum.TooltipDataType[typeName]
 	if dataType then
@@ -1661,6 +2144,7 @@ end
 local function RegisterHandlers()
 	HookProcessInfo()
 	hooksecurefunc(GameTooltip, "Show", OnShowOwnedByTalent)
+	hooksecurefunc(GameTooltip, "Show", RefreshPortraitOnShow)
 	if CollectionWardrobeUtil and CollectionWardrobeUtil.SetAppearanceTooltip then
 		hooksecurefunc(CollectionWardrobeUtil, "SetAppearanceTooltip", OnSetAppearanceTooltip)
 	end
@@ -1698,6 +2182,9 @@ frame:SetScript("OnEvent", function(self, _, name)
 	end
 	if type(db.iconBorder) ~= "boolean" then
 		db.iconBorder = false
+	end
+	if type(db.skipBgEnemies) ~= "boolean" then
+		db.skipBgEnemies = false
 	end
 	if type(db.roundPortraits) ~= "boolean" then
 		db.roundPortraits = false
