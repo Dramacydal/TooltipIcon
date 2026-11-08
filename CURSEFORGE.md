@@ -1,6 +1,6 @@
 # TooltipIcon
 
-TooltipIcon shows icons in tooltips: spell, item and aura icons, and the portraits of players and NPCs.
+TooltipIcon shows icons inside tooltips: spell, item, aura and currency icons, and the portraits of players, NPCs and pets.
 
 Made for **WoW: Forever**. Lightweight: no libraries, no frames of its own.
 
@@ -13,13 +13,17 @@ Made for **WoW: Forever**. Lightweight: no libraries, no frames of its own.
 - **Toys**
 - **Companion pets**
 - **Mounts**
+- **Currencies**
 - **Transmog appearances** — the wardrobe and the transmogrifier.
-- **Units** — players and NPCs, with their portrait.
+- **Units** — players, NPCs and pets, with their portrait.
 
 ## Features
 
 - A master switch and a separate checkbox for every tooltip category.
-- Player tooltips: choose how the class and the faction are shown, and color player names by class.
+- Adjustable icon size and gap, an optional icon border, optional round portraits.
+- "Name only next to the icon" option: only the name stays next to the icon, the rest goes below it.
+- Player tooltips: the class and the faction as icons on the level line (size and position are adjustable) or on one line, `PvP` next to the name, player names colored by class.
+- Battlegrounds: the game hides most data of enemy players there, so their tooltips are simpler. You can skip them completely with an option (marked "Unstable").
 - A native settings page (Esc → Options → AddOns → TooltipIcon).
 - Works in every client language; the settings are in English, German, French, Spanish, Russian and Chinese (Simplified).
 
@@ -27,8 +31,6 @@ Made for **WoW: Forever**. Lightweight: no libraries, no frames of its own.
 
 - `/tti` — open the settings.
 - `/tti on`, `/tti off`, `/tti toggle` — turn all icons on or off.
-- `/tti class 1|2` — how the class and the faction of a player are shown.
-- `/tti size <n>` — minimum icon size in pixels (default 32); `/tti gap <n>` — gap between the icon and the text.
 - `/tti reset` — back to the defaults.
 - `/tti debug` — shows how the addon reads the tooltip you hover over; please attach it to bug reports.
 

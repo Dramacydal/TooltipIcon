@@ -58,6 +58,8 @@ TTI_OPTIONS_SKIP_BG_ENEMIES = "Ignorer les joueurs ennemis et leurs familiers su
 TTI_OPTIONS_SKIP_BG_ENEMIES_DESC = "Les infobulles des joueurs ennemis et de leurs familiers sur les champs de bataille restent telles que le jeu les construit. Le jeu masque la plupart des données de ces unités : leurs infobulles sont mises en page avec des informations limitées et peuvent sembler incorrectes."
 TTI_OPTIONS_ROUND_PORTRAITS = "Afficher des portraits ronds"
 TTI_OPTIONS_ROUND_PORTRAITS_DESC = "Les portraits des unités sont ronds au lieu d'être carrés."
+TTI_OPTIONS_RESET = "Réinitialiser aux valeurs par défaut"
+TTI_OPTIONS_RESET_DESC = "Réinitialise toutes les options de TooltipIcon à leurs valeurs par défaut."
 
 TTI_MSG_OVERWRITTEN = "Un autre addon réécrit sans cesse les lignes des infobulles après TooltipIcon, les icônes ne peuvent donc pas s'afficher correctement. Désolé : TooltipIcon ne fonctionnera pas correctement tant que cet addon est actif ou que ses options d'infobulles sont activées."
 

@@ -160,6 +160,11 @@ function ns.RegisterSettings()
 		end
 	end
 
+	-- every option back to its default: a button at the end of the list, like the one of TerrainWorldMap
+	layout:AddInitializer(CreateSettingsButtonInitializer(TTI_OPTIONS_RESET, TTI_OPTIONS_RESET, function()
+		ns.ResetSettings()
+	end, TTI_OPTIONS_RESET_DESC, true))
+
 	-- the panel's own "Defaults" button offers to reset every interface setting of the game:
 	-- hidden while this category is shown
 	if SettingsPanel and SettingsPanel.DisplayCategory then

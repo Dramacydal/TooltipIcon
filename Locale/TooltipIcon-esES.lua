@@ -58,6 +58,8 @@ TTI_OPTIONS_SKIP_BG_ENEMIES = "Omitir a los jugadores enemigos y sus mascotas en
 TTI_OPTIONS_SKIP_BG_ENEMIES_DESC = "Las descripciones de los jugadores enemigos y sus mascotas en campos de batalla se dejan como las crea el juego. El juego oculta la mayoría de los datos de esas unidades, por lo que su descripción se maqueta con información limitada y puede verse mal."
 TTI_OPTIONS_ROUND_PORTRAITS = "Mostrar retratos redondos"
 TTI_OPTIONS_ROUND_PORTRAITS_DESC = "Los retratos de unidades son redondos en lugar de cuadrados."
+TTI_OPTIONS_RESET = "Restablecer valores predeterminados"
+TTI_OPTIONS_RESET_DESC = "Restablece todas las opciones de TooltipIcon a sus valores predeterminados."
 
 TTI_MSG_OVERWRITTEN = "Otro addon reescribe continuamente las líneas de las descripciones después de TooltipIcon, por lo que los iconos no pueden mostrarse correctamente. Lo sentimos: TooltipIcon no funcionará bien mientras ese addon esté activo o sus opciones de descripciones estén activadas."
 

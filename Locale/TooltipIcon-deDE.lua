@@ -58,6 +58,8 @@ TTI_OPTIONS_SKIP_BG_ENEMIES = "Gegnerische Spieler und Begleiter auf Schlachtfel
 TTI_OPTIONS_SKIP_BG_ENEMIES_DESC = "Tooltips gegnerischer Spieler und ihrer Begleiter auf Schlachtfeldern bleiben so, wie das Spiel sie aufbaut. Das Spiel verbirgt die meisten Daten solcher Einheiten, deshalb werden ihre Tooltips mit unvollständigen Informationen gestaltet und sehen unter Umständen falsch aus."
 TTI_OPTIONS_ROUND_PORTRAITS = "Runde Porträts anzeigen"
 TTI_OPTIONS_ROUND_PORTRAITS_DESC = "Einheitenporträts sind rund statt quadratisch."
+TTI_OPTIONS_RESET = "Auf Standard zurücksetzen"
+TTI_OPTIONS_RESET_DESC = "Setzt alle TooltipIcon-Optionen auf ihre Standardwerte zurück."
 
 TTI_MSG_OVERWRITTEN = "Ein anderes Addon überschreibt die Tooltip-Zeilen immer wieder nach TooltipIcon, daher können die Symbole nicht korrekt angezeigt werden. Entschuldigung: TooltipIcon funktioniert nicht richtig, solange dieses Addon aktiv ist oder dessen Tooltip-Optionen eingeschaltet sind."
 

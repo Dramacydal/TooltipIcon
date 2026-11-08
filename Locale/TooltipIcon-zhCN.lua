@@ -58,6 +58,8 @@ TTI_OPTIONS_SKIP_BG_ENEMIES = "在战场中跳过敌方玩家及其宠物 (Unsta
 TTI_OPTIONS_SKIP_BG_ENEMIES_DESC = "战场中敌方玩家及其宠物的提示信息保持游戏原样。游戏会隐藏这类单位的大部分数据，因此其提示信息只能根据有限的信息排版，可能显示不正确。"
 TTI_OPTIONS_ROUND_PORTRAITS = "显示圆形肖像"
 TTI_OPTIONS_ROUND_PORTRAITS_DESC = "单位肖像为圆形而非方形。"
+TTI_OPTIONS_RESET = "恢复默认设置"
+TTI_OPTIONS_RESET_DESC = "将 TooltipIcon 的所有选项恢复为默认值。"
 
 TTI_MSG_OVERWRITTEN = "另一个插件在 TooltipIcon 之后不断改写提示信息的行，因此图标无法正确显示。抱歉，只要该插件仍在运行或其提示信息选项处于开启状态，TooltipIcon 就无法正常工作。"
 

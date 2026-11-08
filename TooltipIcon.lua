@@ -127,12 +127,13 @@ end
 
 -- Writes `prefix .. text` to a line. A secret text can't be joined in Lua, but SetFormattedText accepts it as
 -- an argument. Returns the text written, or nil when it is secret.
-local function SetLineText(line, prefix, text)
+local function SetLineText(line, prefix, text, suffix)
+	suffix = suffix or ""
 	if issecret(text) then
-		line:SetFormattedText(prefix .. "%s", text)
+		line:SetFormattedText(prefix .. "%s" .. suffix, text)
 		return nil
 	end
-	local full = prefix .. text
+	local full = prefix .. text .. suffix
 	line:SetText(full)
 	return full
 end
@@ -229,7 +230,7 @@ end
 -- (the measured height when a header of that length was seen, an estimate from the first two lines otherwise).
 local function MinBlockHeight(tooltip, kind)
 	local lines = kinds[kind].minLines
-	if not lines or (kinds[kind].nameOnlyKey and db[kinds[kind].nameOnlyKey]) then
+	if not lines then
 		return 0
 	end
 	local cache = GetCache(tooltip, kind, lines)
@@ -392,13 +393,20 @@ local function ApplyLayout(tooltip, st, size, padH)
 			and current:sub(1, #written) == written then
 			text = text .. current:sub(#written + 1)
 		end
-		st.applied[i] = SetLineText(line, widthSpacer .. (i == st.count and padSpacer or ""), text)
+		-- the extra rows of a one-line header go half before and half after the text, so the name stands in the middle; a row at the
+		-- end needs a character (an invisible one): the engine drops trailing empty rows
+		local rows = i == st.count and st.extraRows or 0
+		local before = st.count == 1 and math.floor(rows / 2) or 0 -- only a lone name is centered; below a header all go after
+		st.applied[i] = SetLineText(line, ("\n"):rep(before) .. widthSpacer .. (i == st.count and padSpacer or ""), text,
+			rows > 0 and ("\n|c00000000.|r"):rep(rows - before) or nil)
 	end
 	-- the text of a taller line is centered; some kinds keep it at the top (the space goes below the header)
 	-- (both columns of the line: the right text would otherwise sink to the bottom of the taller line)
-	-- (a last line with inline icons stays centered: the client aligns the icons and the text itself)
+	-- (a last line with inline icons or the only line of "name only" stays centered)
 	if kinds[st.kind].padTop then
-		local top = padH > 0 and not (st.inlineIcons and st.inlineIcons.line == st.count)
+		local nameOnlyKey = kinds[st.kind].nameOnlyKey
+		local top = padH > 0 and not (nameOnlyKey and db[nameOnlyKey]) -- "name only": the name is centered on the icon
+			and not (st.inlineIcons and st.inlineIcons.line == st.count)
 		Line(tooltip, "TextLeft", st.count):SetJustifyV(top and "TOP" or st.origJustifyV)
 		Line(tooltip, "TextRight", st.count):SetJustifyV(top and "TOP" or st.origRightJustifyV)
 		-- the right text is centered on the line: it needs the same height to stand at the top as well
@@ -412,6 +420,13 @@ local function ApplyLayout(tooltip, st, size, padH)
 			st.kind, st.count, size, padH, tooltip:NumLines()))
 	end
 	SetHeaderFlow(tooltip, st, true)
+	-- the last line with extra rows needs the wrap: without it only the first row is shown, cut off with "..."
+	if st.extraRows and st.extraRows > 0 then
+		local line = Line(tooltip, "TextLeft", st.count)
+		line:SetWordWrap(true)
+		line:SetHeight(0)
+		line:SetMaxLines(0)
+	end
 
 	st.size, st.padH = size, padH
 	st.icon:SetSize(size, size)
@@ -566,6 +581,22 @@ driver:SetScript("OnUpdate", function(self)
 				local text = Line(tooltip, "TextLeft", 1):GetText()
 				Print(("header check #%s %s: %s, line 1 = %s"):format(tostring(st.cycle), st.kind, overwritten and "OVERWRITTEN" or "intact",
 					issecret(text) and "<secret>" or (tostring(text):gsub("|", "||"))))
+				for i = 1, st.count do
+					-- what limits the line: truncation, rows, wrap, size, anchors
+					local line = Line(tooltip, "TextLeft", i)
+					local function V(value)
+						return issecret(value) and "<secret>" or tostring(value)
+					end
+					local points = {}
+					for k = 1, line:GetNumPoints() do
+						local point, relative, relativePoint, x, y = line:GetPoint(k)
+						points[#points + 1] = ("%s>%s:%s(%s,%s)"):format(V(point), relative and V(relative:GetName()) or "nil",
+							V(relativePoint), V(x), V(y))
+					end
+					Print(("line #%s %d: truncated=%s maxLines=%s wrap=%s size=%sx%s points=%s"):format(tostring(st.cycle), i,
+						V(line:IsTruncated()), V(line:GetMaxLines()), V(line:CanWordWrap()), V(line:GetWidth()),
+						V(line:GetHeight()), table.concat(points, " ")))
+				end
 				Print(("icon #%s: shown=%s visible=%s alpha=%s size=%sx%s tooltip alpha=%s"):format(tostring(st.cycle), tostring(st.icon:IsShown()),
 					tostring(st.icon:IsVisible()), tostring(Plain(st.icon:GetAlpha())), tostring(Plain(st.icon:GetWidth())),
 					tostring(Plain(st.icon:GetHeight())), tostring(Plain(tooltip:GetAlpha()))))
@@ -1351,7 +1382,8 @@ end
 
 -- Everything is secret (a battleground match): the text of the lines can't be read, their types can. The lines
 -- of a player are counted by what stays readable of the unit; for other units the plain lines after the name
--- (owner and level of a pet) make the header, as many as the kind allows; a line of another type ends it.
+-- (owner and level of a pet) make the header, as many as the kind allows; a line of another type, or one that is
+-- not from the data, ends it.
 local function SecretUnitHeaderCount(tooltip, tooltipData, numLines)
 	local _, instanceType = IsInInstance()
 	-- A player: whether it is one and whether it has a guild stays readable through "mouseover", so the lines are
@@ -1376,7 +1408,8 @@ local function SecretUnitHeaderCount(tooltip, tooltipData, numLines)
 	for i = 2, math.min(kinds.unit.maxHeader, numLines) do
 		local info = DataLine(tooltipData, i)
 		local lineType = info and info.type
-		if lineType ~= nil and lineType ~= lineTypes.None and lineType ~= lineTypes.UnitOwner then
+		-- no type: not a line of the data but one added by an addon (a quest line): it ends the header
+		if lineType == nil or (lineType ~= lineTypes.None and lineType ~= lineTypes.UnitOwner) then
 			break
 		end
 		count = i
@@ -1727,18 +1760,32 @@ local function ShowIcon(tooltip, tooltipData, kindName, texture)
 		st.icon:SetTexture(texture)
 	end
 	local size, padH, natural, cached = Plan(tooltip, kindName, count)
-	-- a secret header line can't get the pad texture (see SpaceWidth): the icon is as high as the header block
+	-- A secret header line can't get the pad texture (see SpaceWidth): the icon is as high as the header block.
+	-- A kind with a minimum height (units) gets the missing height as extra rows of the last header line: rows
+	-- as line breaks before and after the text, see ApplyLayout.
+	st.extraRows = 0
+	local plannedSize = size -- the size of the plan: the minimum icon size, the minimum height of the kind
+	local secretHeader = false
 	for i = 1, count do
 		if issecret(st.orig[i]) then
+			secretHeader = true
 			size, padH = Clamp(math.max(natural, MIN_ICON_SIZE)), 0
 			break
 		end
+	end
+	-- A header of one line that keeps its text at the top (a unit, "name only") gets the rows as well, with a
+	-- readable text too: a pad texture on the line leaves the name low instead of in the middle of the portrait.
+	local rowMode = (secretHeader and kinds[kindName].minLines) or (kinds[kindName].padTop and count == 1 and padH > 0)
+	if rowMode then
+		local rowHeight = math.max(LineHeightOf(Line(tooltip, "TextLeft", count)), 1)
+		st.extraRows = math.max(0, math.floor((plannedSize - natural) / rowHeight + 0.5))
+		size, padH = Clamp(math.max(natural + st.extraRows * rowHeight, MIN_ICON_SIZE)), 0
 	end
 	st.natural, st.pass, st.fitPasses = natural, 0, 0
 	st.applied = nil
 	ApplyLayout(tooltip, st, size, padH)
 
-	st.cached = cached
+	st.cached = cached or rowMode -- the correction passes would measure a pad that such a line doesn't have
 	pending[tooltip] = true
 	driver:Show()
 end

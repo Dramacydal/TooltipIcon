@@ -58,5 +58,7 @@ TTI_OPTIONS_SKIP_BG_ENEMIES = "Skip enemy players and pets in battlegrounds (Uns
 TTI_OPTIONS_SKIP_BG_ENEMIES_DESC = "Tooltips of enemy players and their pets in battlegrounds are left as the game builds them. The game hides most data of such units, so their tooltips are laid out with limited information and may look wrong."
 TTI_OPTIONS_ROUND_PORTRAITS = "Show round portraits"
 TTI_OPTIONS_ROUND_PORTRAITS_DESC = "Unit portraits are round instead of square."
+TTI_OPTIONS_RESET = "Reset to Defaults"
+TTI_OPTIONS_RESET_DESC = "Resets every TooltipIcon option to its default value."
 
 TTI_MSG_OVERWRITTEN = "Another addon keeps rewriting the tooltip lines after TooltipIcon, so the icons cannot be displayed correctly. Sorry, TooltipIcon will not work properly until that addon is disabled or its tooltip options are turned off."
