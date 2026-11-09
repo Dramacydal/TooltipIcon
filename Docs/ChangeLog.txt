@@ -1,0 +1,28 @@
+
+TooltipIcon ChangeLog
+================
+1.0.0 (November 9, 2026)
+----------------------------
+- First release for WoW: Forever.
+- Icons inside tooltips, in the top-left corner next to the name: spells, talents,
+  buffs and debuffs, items (with comparison tooltips), toys, companion pets, mounts,
+  currencies and transmog appearances. Players, NPCs and pets get their portrait.
+- Items: the item properties (binding, item level, slot, Unique, Crafting Reagent,
+  Cosmetic, bag size, ...) are shown next to the icon. Talents: the rank is shown next
+  to the icon.
+- Units: the faction and the creature type of NPCs and the owner of pets are shown next
+  to the portrait; "PvP" is shown next to the name. Players: the class and the faction
+  as icons on the level line (size and shift are adjustable) or on one line; optional
+  class colors for player names.
+- Battlegrounds and combat: the game hides most data of enemy players there. Their
+  tooltips are still laid out with what the client allows (portrait, name, level, guild,
+  faction, "PvP"). The option "Skip enemy players and pets in battlegrounds (Unstable)"
+  leaves such tooltips to the game.
+- Settings page (Esc -> Options -> AddOns -> TooltipIcon): a master switch, a checkbox for
+  every tooltip category, "Name only next to the icon" for spells, items, toys,
+  companion pets, mounts and units, minimum icon size, gap, icon border, round
+  portraits, and a "Reset to Defaults" button. Slash command: /tti.
+- Works in every client language; the settings are in English, German, French, Spanish,
+  Russian and Chinese (Simplified).
+- Works together with other addons that change tooltips (Leatrix Plus and others): if
+  another addon keeps rewriting the lines after TooltipIcon, a warning is shown once.

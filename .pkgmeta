@@ -1,0 +1,12 @@
+package-as: TooltipIcon
+
+manual-changelog:
+    filename: Docs/ChangeLog.txt
+    markup-type: plain
+
+license-output: LICENSE
+
+ignore:
+    - .claude-docs
+    - CLAUDE.md
+    - CURSEFORGE.md
