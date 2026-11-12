@@ -456,12 +456,25 @@ local function GetLineState(tooltip, i)
 	if issecret(text) or issecret(rightText) or issecret(r) or issecret(rr) then
 		return
 	end
-	return { text = text, r = r, g = g, b = b, rightText = rightText, rr = rr, rg = rg, rb = rb, rightShown = right:IsShown() }
+	-- the wrap of the line goes with its text: the engine sets it per line (a long description wraps, a short
+	-- property line does not), and a long text moved into a line that does not wrap would stretch the tooltip
+	local wrap = left:CanWordWrap()
+	if issecret(wrap) then
+		wrap = nil
+	end
+	-- the width the engine gave a wrapping line (a line that does not wrap is as wide as its text)
+	local width = wrap and Plain(left:GetWidth()) or nil
+	return { text = text, r = r, g = g, b = b, rightText = rightText, rr = rr, rg = rg, rb = rb, rightShown = right:IsShown(),
+		wrap = wrap, width = width }
 end
 
 local function SetLineState(tooltip, i, state)
 	local left, right = Line(tooltip, "TextLeft", i), Line(tooltip, "TextRight", i)
 	left:SetText(state.text)
+	if state.wrap ~= nil then
+		left:SetWordWrap(state.wrap)
+		left:SetWidth(state.wrap and state.width or 0)
+	end
 	left:SetTextColor(state.r, state.g, state.b)
 	right:SetText(state.rightText)
 	right:SetTextColor(state.rr, state.rg, state.rb)
@@ -581,7 +594,7 @@ driver:SetScript("OnUpdate", function(self)
 				local text = Line(tooltip, "TextLeft", 1):GetText()
 				Print(("header check #%s %s: %s, line 1 = %s"):format(tostring(st.cycle), st.kind, overwritten and "OVERWRITTEN" or "intact",
 					issecret(text) and "<secret>" or (tostring(text):gsub("|", "||"))))
-				for i = 1, st.count do
+				for i = 1, math.min(tooltip:NumLines(), st.count + 3) do
 					-- what limits the line: truncation, rows, wrap, size, anchors
 					local line = Line(tooltip, "TextLeft", i)
 					local function V(value)
